@@ -1,0 +1,13 @@
+4 node topology.  
+
+Node1----Node2------Node3 
+           +
+           |
+           |
+          Node4
+
+There is node4 which is connected to node2 through other interface. 
+Node1 is a packet generator and generate pkts of multiple types all destined to node3. 
+Node2 is a router which will forward all such packets to destination node3. Node3 runs respective applications to process packet of specific types. 
+Node2 has an additional functionality to route the copy of packets it is forwarding from node1 to node3 to node4 also. 
+Node4 has the one application A which is capable of recieving all types of packets and logg them. After logging, A handsover the packet to repective processes to handle the packet processing.
