@@ -6,6 +6,15 @@
 #include <unistd.h>
 #include <memory.h>
 
+/* Tcp Connection */
+TcpConn::TcpConn() {
+
+}
+
+
+
+
+/* Tcp Server */
 TcpServer::TcpServer() {
 }
 
@@ -18,7 +27,6 @@ TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no)
 TcpServer::~TcpServer() { }
 
 /* Tcp Server Fn */
-
 void *
 tcp_server_fn (void *arg) {
 
@@ -29,7 +37,6 @@ tcp_server_fn (void *arg) {
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
     pthread_setcanceltype( PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
-    
     tcp_server->master_skt_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP );
     tcp_server->dummy_master_skt_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP );
 
@@ -98,25 +105,85 @@ tcp_server_fn (void *arg) {
     }
 
 
-    //pthread_cleanup_push(tcp_server_cleanup_handler, (void *)tcp_server);
-
     FD_ZERO(&tcp_server->active_client_fds);
     FD_ZERO(&tcp_server->backup_client_fds);
 
     struct sockaddr_in client_addr;
-    int bytes_recvd = 0,
-        addr_len = sizeof(client_addr);
+    int bytes_recvd = 0;
+    socklen_t addr_len = sizeof(client_addr);
 
     FD_SET(tcp_server->master_skt_fd, &tcp_server->backup_client_fds);
     FD_SET(tcp_server->dummy_master_skt_fd, &tcp_server->backup_client_fds);
+
+    uint16_t max_fd = tcp_server->master_skt_fd > tcp_server->dummy_master_skt_fd ?
+                    tcp_server->master_skt_fd :
+                    tcp_server->dummy_master_skt_fd;
+
+    uint16_t sec_max_fd = tcp_server->master_skt_fd < tcp_server->dummy_master_skt_fd ?
+                    tcp_server->master_skt_fd :
+                    tcp_server->dummy_master_skt_fd;
+
+     sem_post(&tcp_server->thread_start_semaphore);
 
     while (true) {
 
         memcpy(&tcp_server->active_client_fds,
                       &tcp_server->backup_client_fds, sizeof(fd_set));
 
-        
-    }
+         printf ("Server blocked on select\n");
+         select( max_fd +1 , &tcp_server->active_client_fds, NULL, NULL, NULL);
+
+         if (FD_ISSET(tcp_server->master_skt_fd, &tcp_server->active_client_fds)){
+
+             /* Connection initiation Request */
+            int comm_socket_fd =  accept (tcp_server->master_skt_fd,
+                                                        (struct sockaddr *)&client_addr, &addr_len);
+
+            if (comm_socket_fd < 0 ){
+                printf ("Error : Bad Comm FD returned by accept\n");
+                continue;
+            }
+
+            FD_SET(comm_socket_fd, &tcp_server->backup_client_fds);
+
+            if (max_fd > comm_socket_fd) {
+
+                if (sec_max_fd > comm_socket_fd) {
+
+                }
+                else {
+                    sec_max_fd = comm_socket_fd;
+                }
+            }
+            else {
+                sec_max_fd = max_fd;
+                max_fd = comm_socket_fd;
+            }
+
+            TcpConn *tcp_conn = new TcpConn();
+            tcp_conn->comm_sock_fd = comm_socket_fd;
+            tcp_conn->conn_state = TCP_ESTABLISHED;
+            tcp_conn->conn_origin = tcp_via_accept;
+            tcp_conn->peer_addr = client_addr.sin_addr.s_addr;
+            tcp_conn->peer_port_no = client_addr.sin_port;
+            tcp_conn->self_port_no = tcp_server->self_port_no;
+            tcp_conn->self_port_no = tcp_server->self_ip_addr;
+            TcpClient *tcp_client = new TcpClient();
+            tcp_client->tcp_conn = tcp_conn;
+            tcp_server->tcp_client_conns.push_back(tcp_client);
+            /* Now send Connect notification */
+            if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_connected) {
+                    tcp_server->tcp_notif->client_connected (tcp_client);
+            }
+         }
+         else if (FD_ISSET(tcp_server->dummy_master_skt_fd, &tcp_server->active_client_fds)){
+
+         }
+        else {
+
+        }
+
+    } // server loop ends
 
     return NULL;
 }
@@ -139,5 +206,10 @@ void TcpServer::Start() {
         return;
     }
 
+    printf ("TcpServer Thread Created Successfully\n");
+}
+
+/* TcpClient */
+TcpClient::TcpClient() {
 
 }

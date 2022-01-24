@@ -81,12 +81,26 @@ class TcpConn {
     void SetExpirationInterval(uint16_t exp_interval_in_sec);
 };
 
+class TcpClient {
+
+    public:
+    TcpConn *tcp_conn;
+    timer_t re_try_timer;
+    uint8_t retry_time_interval;
+    
+    /* Methods */
+    TcpClient();
+    void connect();
+    void disconnect();
+    void shutdown();
+};
+
 class TcpServerNotification {
 
     public:
-    void (*client_connected)(const TcpConn&);
-    void (*client_disconnected)(const TcpConn&);
-    void (*client_msg_recvd)(const TcpConn&, char *, uint16_t);
+    void (*client_connected)(const TcpClient*);
+    void (*client_disconnected)(const TcpClient*);
+    void (*client_msg_recvd)(const TcpClient*, char *, uint16_t);
 };
 
 class TcpServer {
@@ -94,7 +108,7 @@ class TcpServer {
     public:
     uint32_t self_ip_addr;
     uint16_t self_port_no;
-    std::vector <TcpConn> tcp_client_conns;
+    std::vector <TcpClient *> tcp_client_conns;
     pthread_t server_thread;
     TcpServerNotification *tcp_notif;
     sem_t thread_start_semaphore;
@@ -111,22 +125,11 @@ class TcpServer {
     void ForceDisconnectAllClients();
     void DiscoconnectClient(const uint32_t& client_ip, const uint16_t& client_port_no);
     void Stop();
-    void RegisterClientConnectCbk (void (*)(const TcpConn&));
-    void RegisterClientDisConnectCbk (void (*)(const TcpConn&));
-    void RegisterClientMsgRecvCbk (void (*)(const TcpConn&, char *, uint16_t));
+    void RegisterClientConnectCbk (void (*)(const TcpClient*));
+    void RegisterClientDisConnectCbk (void (*)(const TcpClient*));
+    void RegisterClientMsgRecvCbk (void (*)(const TcpClient*, char *, uint16_t));
     void Cleanup();
 }; 
 
-class TcpClient {
 
-    public:
-    TcpConn tcp_conn;
-    timer_t re_try_timer;
-    uint8_t retry_time_interval;
-    
-    /* Methods */
-    void connect();
-    void disconnect();
-    void shutdown();
-};
 #endif 
