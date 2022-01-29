@@ -28,6 +28,7 @@
 
 #define MAX_CLIENT_SUPPORTED    100
 #define TCP_CONN_RECV_BUFFER_SIZE    1028
+#define TCP_DEFAULT_PORT_NO 40000
 
 typedef enum {
 

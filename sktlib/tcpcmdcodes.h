@@ -2,7 +2,7 @@
 #define __TCP_CMDCODES__
 
 /* TCP Server Operations */
-#define TCP_SERVER_CREATE   1  // config tcp-server create <name> <ip addr> <port no>
+#define TCP_SERVER_CREATE   1  // config tcp-server <name> [<ip addr>] [<port no>]
 #define TCP_SERVER_ABORT    2   // config tcp-server <name> abort
 #define TCP_SERVER_SET_MAX_CLIENT_LIMIT 3 // config tcp-server <name> [no] max-client-limit <N>
 #define TCP_SERVER_RESET    4  // run tcp-server <name> reset
@@ -19,7 +19,7 @@
 #define TCP_SERVER_STOP_LISTENING_ONE_CLIENT   15  // config tcp-server <name> [no] client <ip-addr> listen
 
 /* TCP Client Operations */
-#define TCP_CLIENT_CREATE   1 // config tcp-client create <name> [<src-ip-addr>] [<src-port-no>]
+#define TCP_CLIENT_CREATE   1 // config tcp-client <name> [<src-ip-addr>] [<src-port-no>]
 #define TCP_CLIENT_ABORT    2 // config tcp-client <name> abort
 #define TCP_CLIENT_DISCONNECT   3 // run tcp-client <name> disconnect
 #define TCP_CLIENT_SHOW_STATE   4 // show tcp-client <name>
