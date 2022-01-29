@@ -87,7 +87,8 @@ TcpServer::TcpServer() {
     for ( i = 0 ; i < array_size; i++) {
         this->fd_array[i] = -1;
     }
-    sem_init(&wait_for_client_disconnection, 0 , 0);
+    sem_init(&semaphore_wait_for_client_operation_complete, 0 , 0);
+    accept_new_conn = true;
 }
 
 TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no) {
@@ -102,6 +103,8 @@ TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no)
 
     this->self_ip_addr = self_ip_addr;
     this->self_port_no = self_port_no;
+    sem_init(&semaphore_wait_for_client_operation_complete, 0 , 0);
+    accept_new_conn = true;
 }
 
 TcpServer::~TcpServer() { }
@@ -110,6 +113,7 @@ void *
 TcpServer::TcpServerThreadFn() {
 
   int opt = 1;
+  bool rc;
 
     TcpServer *tcp_server = this;
     
@@ -124,7 +128,7 @@ TcpServer::TcpServerThreadFn() {
 
         printf("TCP Server Socket Creation Failed\n");
         /* Signal the main routine that thread routine fn has started */
-         sem_post(&tcp_server->thread_start_semaphore);
+         sem_post(&tcp_server->semaphore_wait_for_thread_start);
          pthread_exit(NULL);
     }
 
@@ -188,7 +192,6 @@ TcpServer::TcpServerThreadFn() {
     FD_ZERO(&tcp_server->backup_client_fds);
 
     struct sockaddr_in client_addr;
-    int bytes_recvd = 0;
     socklen_t addr_len = sizeof(client_addr);
 
     FD_SET(tcp_server->master_skt_fd, &tcp_server->backup_client_fds);
@@ -198,7 +201,7 @@ TcpServer::TcpServerThreadFn() {
 
     uint16_t max_fd = GetMaxFd();
 
-     sem_post(&tcp_server->thread_start_semaphore);
+     sem_post(&tcp_server->semaphore_wait_for_thread_start);
 
     while (true) {
 
@@ -216,6 +219,12 @@ TcpServer::TcpServerThreadFn() {
 
             if (comm_socket_fd < 0 ){
                 printf ("Error : Bad Comm FD returned by accept\n");
+                continue;
+            }
+
+            if (tcp_server->accept_new_conn == false) {
+                printf ("Tcp Server is not accepting new connections\n");
+                close(comm_socket_fd);
                 continue;
             }
 
@@ -243,26 +252,74 @@ TcpServer::TcpServerThreadFn() {
                     tcp_server->tcp_notif->client_connected (tcp_client);
             }
          }
-         else if (FD_ISSET(tcp_server->dummy_master_skt_fd, &tcp_server->active_client_fds)){
 
-             assert(tcp_server->tcp_client_fd_pending_diconnect);
-             FD_CLR (tcp_server->tcp_client_fd_pending_diconnect, &tcp_server->backup_client_fds);
-             remove_from_fd_array(tcp_server->tcp_client_fd_pending_diconnect);
-             uint16_t pos;
-             TcpClient *tcp_client = tcp_server->GetTcpClientbyFd(tcp_server->tcp_client_fd_pending_diconnect, &pos);
-             assert(tcp_client);
-             if (tcp_server->tcp_notif) {
-             tcp_server->tcp_notif->client_disconnected(tcp_client);
+        else if (FD_ISSET(tcp_server->dummy_master_skt_fd, &tcp_server->active_client_fds)){
+             
+             tcp_server_operations_t opn = server_pending_operation;
+             switch (opn)
+             {
+             case tcp_server_operation_none:
+                 break;
+             case tcp_server_stop_listening_client:
+                 break;
+             case tcp_server_resume_listening_client:
+                 break;
+             case tcp_server_stop_accepting_new_connections:
+                 break;
+             case tcp_server_resume_accepting_new_connections:
+                 break;
+             case tcp_server_close_client_connection:
+                rc = TcpServerChangeState(pending_tcp_client, opn);
+                if (rc) max_fd = GetMaxFd();
+                 break;
+             case tcp_server_operations_max:
+             default:;
              }
-             tcp_server->RemoveTcpClient(tcp_client);
-             tcp_client->TcpClientAbort();
-             tcp_server->tcp_client_fd_pending_diconnect = 0;
-             n_clients_connected--;
-             sem_post(&wait_for_client_disconnection);
          }
-        else {
 
-            
+        else {
+            std::list<TcpClient *>::iterator it;
+            TcpClient *tcp_client;
+            struct sockaddr_in client_addr;
+            socklen_t addr_len = sizeof(client_addr);
+
+            for (it = tcp_client_conns.begin(); it != tcp_client_conns.end(); ++it)
+            {
+                tcp_client = *it;
+
+                if (tcp_client->listen_by_server == false) continue;
+
+                if (FD_ISSET(tcp_client->tcp_conn->comm_sock_fd, &active_client_fds))
+                {
+                    tcp_client->tcp_conn->bytes_recvd =
+                        recvfrom(tcp_client->tcp_conn->comm_sock_fd,
+                                        tcp_client->tcp_conn->recv_buffer,
+                                        TCP_CONN_RECV_BUFFER_SIZE,
+                                        0, (struct sockaddr *)&client_addr, &addr_len);
+                
+                    if (tcp_client->tcp_conn->bytes_recvd == 0) {
+
+                        printf ("Printf Client abrupt termination\n");
+
+                        if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_disconnected)
+                        {
+                            tcp_server->tcp_notif->client_disconnected(tcp_client);
+                        }
+                        remove_from_fd_array(tcp_client->tcp_conn->comm_sock_fd);
+                        tcp_server->RemoveTcpClient(tcp_client);
+                        tcp_client->TcpClientAbort();
+                         n_clients_connected--;
+                        max_fd = GetMaxFd();
+                        continue;
+                    }
+
+                    if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_msg_recvd)
+                    {
+                        tcp_server->tcp_notif->client_msg_recvd(tcp_client, tcp_client->tcp_conn->recv_buffer, tcp_client->tcp_conn->bytes_recvd);
+                    }
+                }
+            } // for loop ends
+
         }
 
     } // server loop ends
@@ -285,9 +342,9 @@ void TcpServer::Start() {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-    sem_init(&this->thread_start_semaphore, 0, 0);
+    sem_init(&this->semaphore_wait_for_thread_start, 0, 0);
     pthread_create(&this->server_thread, &attr, tcp_server_fn, (void *)this);
-    sem_wait(&this->thread_start_semaphore);
+    sem_wait(&this->semaphore_wait_for_thread_start);
 
     if (this->master_skt_fd < 0 ||
         this->dummy_master_skt_fd < 0) {
@@ -314,17 +371,17 @@ TcpServer::TcpSelfConnect() {
     memset(&server_addr, 0, sizeof(server_addr));
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(this->self_port_no + 1);
-    server_addr.sin_addr.s_addr = htonl(this->self_ip_addr);
+    server_addr.sin_port = (this->self_port_no + 1);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
 
     rc = connect(sock_fd, (struct sockaddr *)&server_addr,sizeof(struct sockaddr));
     if(rc < 0) {
-        printf ("%s() Failed\n", __FUNCTION__);
+        printf ("%s() Connect Failed\n", __FUNCTION__);
         return;
     }
     
     printf ("Waiting for client disconnection\n");
-    sem_wait(&wait_for_client_disconnection);
+    sem_wait(&semaphore_wait_for_client_operation_complete);
     printf ("Client disconnection successful\n");
 
     close(sock_fd);
@@ -336,7 +393,8 @@ TcpServer::DiscoconnectClient(TcpClient *tcp_client) {
     assert (tcp_client->tcp_conn->comm_sock_fd);
     assert(tcp_client->tcp_conn->conn_state == TCP_ESTABLISHED);
     assert(tcp_client->tcp_conn->conn_origin== tcp_via_accept);
-    this->tcp_client_fd_pending_diconnect = tcp_client->tcp_conn->comm_sock_fd;
+    this->pending_tcp_client = tcp_client;
+    tcp_client->ref_count++;
     this->TcpSelfConnect();
 }
 
@@ -344,9 +402,9 @@ void
 TcpServer::ForceDisconnectAllClients() {
 
         uint16_t i;
-
-        for (i = 0 ; i < tcp_client_conns.size(); i++) {
-            DiscoconnectClient(tcp_client_conns[i]);
+        std::list<TcpClient *>::iterator it;
+        for (it = tcp_client_conns.begin() ; it  != tcp_client_conns.end(); ++it) {
+            DiscoconnectClient(*it);
         }
 }
 
@@ -358,16 +416,93 @@ TcpServer::RegisterClientDisConnectCbk (void (*cbk)(const TcpClient*)) {
     }
     this->tcp_notif->client_disconnected = cbk;
 }
-\
+
     TcpClient *
-    TcpServer::GetTcpClientbyFd(uint16_t fd, uint16_t *pos) { return NULL ; }
+    TcpServer::GetTcpClientbyFd(uint16_t fd) { 
+
+        std::list<TcpClient *>::iterator it;
+        for ( it = tcp_client_conns.begin() ; it  != tcp_client_conns.end(); ++it) {
+            if ((*it)->tcp_conn->comm_sock_fd == fd) {
+                return *it;
+            }
+        }
+        return NULL;
+    }
+
     TcpClient *
     TcpServer::GetTcpClient(uint32_t ip_addr, uint16_t port_no) { return NULL; }
-    void TcpServer::RemoveTcpClient (TcpClient *tcp_client) {}
+
+    void
+    TcpServer::RemoveTcpClient (TcpClient *tcp_client) {
+         tcp_client_conns.remove(tcp_client);
+    }
+
+bool
+TcpServer::TcpServerChangeState(
+        TcpClient *tcp_client, tcp_server_operations_t opn) {
+
+    bool rc = false;
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+
+    switch (opn) {
+        case tcp_server_operation_none:
+        break;
+        case tcp_server_stop_listening_client:
+        tcp_client->listen_by_server = false;
+        rc = false;
+        break;
+        case tcp_server_resume_listening_client:
+        tcp_client->listen_by_server = true;
+        rc = true;
+        break;
+        case tcp_server_stop_accepting_new_connections:
+        this->accept_new_conn = false;
+        rc = true;
+        break;
+        case tcp_server_resume_accepting_new_connections:
+        this->accept_new_conn = true;
+        rc = true;
+        break;
+        case tcp_server_close_client_connection:
+        {
+            assert(tcp_client);
+            int comm_socket_fd =  accept (this->dummy_master_skt_fd,
+                                                        (struct sockaddr *)&client_addr, &addr_len);
+             close (comm_socket_fd);
+             assert(tcp_client->tcp_conn->comm_sock_fd);
+             FD_CLR (tcp_client->tcp_conn->comm_sock_fd, &this->backup_client_fds);
+             remove_from_fd_array(tcp_client->tcp_conn->comm_sock_fd);
+             if (tcp_notif &&  tcp_notif->client_disconnected) {
+                tcp_notif->client_disconnected(tcp_client);
+             }
+             RemoveTcpClient(tcp_client);
+             tcp_client->TcpClientAbort();
+             n_clients_connected--;
+             sem_post(&semaphore_wait_for_client_operation_complete);
+             rc = true;
+        }
+        break;
+        case tcp_server_operations_max:
+        break;
+        default:
+            ;
+    }
+    return rc;
+}
+
+
+
 
 /* TcpClient */
 TcpClient::TcpClient() {
 
+    listen_by_server = true;
+}
+
+TcpClient::~TcpClient() {
+
+    assert(!ref_count);
 }
 
 bool
@@ -421,5 +556,8 @@ TcpClient::TcpClientAbort() {
     this->TcpClientDisConnect();
     delete this->tcp_conn;
     this->tcp_conn = NULL;
-    delete this;
+    ref_count--;
+    if (ref_count == 0) {
+        delete this;
+    }
 }
