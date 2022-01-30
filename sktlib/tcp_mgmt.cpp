@@ -402,6 +402,10 @@ void TcpServer::Start() {
 }
 
 void
+TcpServer::Stop() {
+
+}
+void
 TcpServer::TcpServerSetState(uint8_t flag) {
 
     this->tcp_server_state_flags |= flag;

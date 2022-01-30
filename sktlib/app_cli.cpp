@@ -6,7 +6,6 @@
 #include "CommandParser/cmdtlv.h"
 #include "tcpcmdcodes.h"
 #include "tcp_mgmt.h"
-#include "tcp_cli_handler.h"
 
 extern std::list<TcpServer *> tcp_server_lst;
 
@@ -47,9 +46,11 @@ config_tcp_server_handler (param_t *param,
                 printf ("Error : Tcp Server Already Exist\n");
                 return -1;
             }
-            tcp_server = config_create_new_tcp_server(
-                            std::string(tcp_server_name),
-                            std::string(ip_addr), port_no);
+            tcp_server = new TcpServer(
+                                network_covert_ip_p_to_n(std::string(ip_addr).c_str()),
+                                port_no,
+                                std::string(tcp_server_name));
+
             if ( !tcp_server ) {
                 printf ("Error : Tcp Server Creation Failed\n");
                 return -1;
@@ -64,6 +65,13 @@ config_tcp_server_handler (param_t *param,
             }
             tcp_server->Start();
             break;
+        case TCP_SERVER_ABORT:
+        tcp_server = TcpServer_lookup(std::string(tcp_server_name));
+            if (!tcp_server) {
+                printf ("Error : Tcp Server do not Exist\n");
+                return -1;
+            }
+        tcp_server->Stop();
         default:
             ;
     }
