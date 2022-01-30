@@ -11,3 +11,4 @@ cd CommandParser
 make
 cd ..
 g++ -g tcp_mgmt.o app_cli.o app_main.o network_utils.o -o app.exe -L CommandParser/ -lcli -lpthread  -lrt
+

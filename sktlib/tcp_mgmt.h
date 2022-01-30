@@ -53,7 +53,9 @@ typedef enum {
     tcp_server_resume_listening_client,
     tcp_server_stop_accepting_new_connections,
     tcp_server_resume_accepting_new_connections,
-    tcp_server_close_client_connection,
+    tcp_server_close_client_connection,  // initiated by client
+    tcp_server_force_close_client_connection, // initiated by Tcp server
+    tcp_server_shut_down,
     tcp_server_operations_max
 } tcp_server_operations_t;
 
@@ -147,7 +149,7 @@ class TcpServer {
         pthread_t server_thread;
         TcpServerNotification *tcp_notif;
         sem_t semaphore_wait_for_thread_start;
-        sem_t semaphore_wait_for_client_operation_complete;
+        sem_t semaphore_wait_for_server_thread_update;
         uint8_t tcp_server_state_flags;
         fd_set active_client_fds;
         fd_set backup_client_fds;

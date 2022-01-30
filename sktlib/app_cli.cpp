@@ -66,12 +66,13 @@ config_tcp_server_handler (param_t *param,
             tcp_server->Start();
             break;
         case TCP_SERVER_ABORT:
-        tcp_server = TcpServer_lookup(std::string(tcp_server_name));
+            tcp_server = TcpServer_lookup(std::string(tcp_server_name));
             if (!tcp_server) {
-                printf ("Error : Tcp Server do not Exist\n");
+                printf("Error : Tcp Server do not Exist\n");
                 return -1;
             }
-        tcp_server->Stop();
+            tcp_server_lst.remove(tcp_server);
+            tcp_server->Stop();
         default:
             ;
     }
@@ -99,6 +100,12 @@ tcp_build_config_cli_tree() {
                 init_param(&start, CMD, "start", config_tcp_server_handler, 0, INVALID, 0, "start tcp-server");
                 libcli_register_param(&tcp_server_name, &start);
                 set_param_cmd_code(&start, TCP_SERVER_START);
+            }
+            {
+                static param_t stop;
+                init_param(&stop, CMD, "abort", config_tcp_server_handler, 0, INVALID, 0, "stop tcp-server");
+                libcli_register_param(&tcp_server_name, &stop);
+                set_param_cmd_code(&stop, TCP_SERVER_ABORT);
             }
             {
                  /* config tcp-server <name> [<ip-addr>] */

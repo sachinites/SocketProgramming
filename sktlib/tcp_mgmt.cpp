@@ -43,14 +43,14 @@ TcpConn::Display() {
         state = "TCP_DISCONNECTED";
         break;
     case TCP_KA_PENDING:
-    state = "TCP_KA_PENDING";
-    break;
+        state = "TCP_KA_PENDING";
+        break;
     case TCP_PEER_CLOSED:
-    state = "TCP_PEER_CLOSED";
-    break;
+        state = "TCP_PEER_CLOSED";
+        break;
     case TCP_ESTABLISHED:
-    state = "TCP_ESTABLISHED";
-    break;
+        state = "TCP_ESTABLISHED";
+        break;
     default:;
     }
     printf ("conn state = %s\n", state);
@@ -121,7 +121,7 @@ TcpServer::TcpServer() {
 
     this->self_ip_addr = 2130706433; // 127.0.0.1
     this->self_port_no = TCP_DEFAULT_PORT_NO;
-    sem_init(&semaphore_wait_for_client_operation_complete, 0 , 0);
+    sem_init(&semaphore_wait_for_server_thread_update, 0 , 0);
     name = "Default";
 }
 
@@ -137,11 +137,14 @@ TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no,
 
     this->self_ip_addr = self_ip_addr;
     this->self_port_no = self_port_no;
-    sem_init(&semaphore_wait_for_client_operation_complete, 0 , 0);
+    sem_init(&semaphore_wait_for_server_thread_update, 0 , 0);
     this->name = name;
 }
 
-TcpServer::~TcpServer() { }
+TcpServer::~TcpServer() { 
+
+    printf ("%s TcpServer shut-down successfully\n", this->name.c_str());
+}
 
 void *
 TcpServer::TcpServerThreadFn() {
@@ -291,17 +294,26 @@ TcpServer::TcpServerThreadFn() {
          }
 
         else if (FD_ISSET(tcp_server->dummy_master_skt_fd, &tcp_server->active_client_fds)){
-             
-             tcp_server_operations_t opn = server_pending_operation;
-             switch (opn)
-             {
-             case tcp_server_operation_none:
-                 break;
-             case tcp_server_stop_listening_client:
-                 rc = TcpServerChangeState(pending_tcp_client, opn);
-                 break;
-             case tcp_server_resume_listening_client:
-                rc = TcpServerChangeState(pending_tcp_client, opn);    
+
+            struct sockaddr_in client_addr;
+            socklen_t addr_len = sizeof(client_addr);
+
+            int comm_socket_fd = accept(this->dummy_master_skt_fd,
+                                                (struct sockaddr *)&client_addr, &addr_len);
+            close(comm_socket_fd);
+
+            tcp_server_operations_t opn = server_pending_operation;
+            switch (opn)
+            {
+            case tcp_server_operation_none:
+                break;
+            case tcp_server_stop_listening_client:
+                rc = TcpServerChangeState(pending_tcp_client, opn);
+                pending_tcp_client = NULL;
+                break;
+            case tcp_server_resume_listening_client:
+                rc = TcpServerChangeState(pending_tcp_client, opn);
+                pending_tcp_client = NULL;
                  break;
              case tcp_server_stop_accepting_new_connections:
                 rc = TcpServerChangeState(NULL, opn);
@@ -311,11 +323,20 @@ TcpServer::TcpServerThreadFn() {
                  break;
              case tcp_server_close_client_connection:
                 rc = TcpServerChangeState(pending_tcp_client, opn);
+                pending_tcp_client = NULL;
                 if (rc) max_fd = GetMaxFd();
                  break;
+            case tcp_server_force_close_client_connection:
+                rc = TcpServerChangeState(pending_tcp_client, opn);
+                pending_tcp_client = NULL;
+                if (rc) max_fd = GetMaxFd();
+                break;
+            case tcp_server_shut_down:
+                pthread_exit(NULL);
              case tcp_server_operations_max:
              default:;
              }
+              server_pending_operation = tcp_server_operation_none;
          }
 
         else {
@@ -384,7 +405,7 @@ void TcpServer::Start() {
     pthread_attr_t attr;
 
     pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
     sem_init(&this->semaphore_wait_for_thread_start, 0, 0);
     pthread_create(&this->server_thread, &attr, tcp_server_fn, (void *)this);
@@ -404,7 +425,26 @@ void TcpServer::Start() {
 void
 TcpServer::Stop() {
 
+    /* 
+    1. Disconnect and Free all connected clients 
+    2. Cancel Server thread
+    3. Close Master and dummy skt FD
+    4.  Free Server
+    */
+   ForceDisconnectAllClients();
+   this->server_pending_operation = tcp_server_shut_down;
+   TcpSelfConnect();
+   pthread_join(this->server_thread, NULL);
+   close (this->dummy_master_skt_fd);
+   close (this->master_skt_fd);
+   delete this->tcp_notif;
+   sem_destroy(&this->semaphore_wait_for_thread_start);
+   sem_destroy(&this->semaphore_wait_for_server_thread_update);
+   assert(!this->pending_tcp_client);
+   assert(this->tcp_client_conns.empty());
+   delete this;
 }
+
 void
 TcpServer::TcpServerSetState(uint8_t flag) {
 
@@ -446,7 +486,9 @@ TcpServer::TcpSelfConnect() {
     }
     
     printf ("Waiting for client disconnection\n");
-    sem_wait(&semaphore_wait_for_client_operation_complete);
+    if (this->server_pending_operation != tcp_server_shut_down) {
+        sem_wait(&semaphore_wait_for_server_thread_update);
+    }
     printf ("Client disconnection successful\n");
 
     close(sock_fd);
@@ -460,16 +502,20 @@ TcpServer::DiscoconnectClient(TcpClient *tcp_client) {
     assert(tcp_client->tcp_conn->conn_origin== tcp_via_accept);
     this->pending_tcp_client = tcp_client;
     tcp_client->ref_count++;
+    this->server_pending_operation = tcp_server_force_close_client_connection;
     this->TcpSelfConnect();
 }
 
 void
 TcpServer::ForceDisconnectAllClients() {
 
-        uint16_t i;
         std::list<TcpClient *>::iterator it;
-        for (it = tcp_client_conns.begin() ; it  != tcp_client_conns.end(); ++it) {
-            DiscoconnectClient(*it);
+        TcpClient *next_tcp_client, *curr_tcp_client;
+        for (it = tcp_client_conns.begin() ; it  != tcp_client_conns.end(); *it = next_tcp_client) {
+            curr_tcp_client = *it;
+            if (!curr_tcp_client) return;
+            next_tcp_client = *(++it);
+            DiscoconnectClient(curr_tcp_client);
         }
 }
 
@@ -507,9 +553,7 @@ TcpServer::TcpServerChangeState(
         TcpClient *tcp_client, tcp_server_operations_t opn) {
 
     bool rc = false;
-    struct sockaddr_in client_addr;
-    socklen_t addr_len = sizeof(client_addr);
-
+    
     switch (opn) {
         case tcp_server_operation_none:
         break;
@@ -531,10 +575,7 @@ TcpServer::TcpServerChangeState(
         break;
         case tcp_server_close_client_connection:
         {
-            assert(tcp_client);
-            int comm_socket_fd =  accept (this->dummy_master_skt_fd,
-                                                        (struct sockaddr *)&client_addr, &addr_len);
-             close (comm_socket_fd);
+             assert(tcp_client);
              assert(tcp_client->tcp_conn->comm_sock_fd);
              FD_CLR (tcp_client->tcp_conn->comm_sock_fd, &this->backup_client_fds);
              remove_from_fd_array(tcp_client->tcp_conn->comm_sock_fd);
@@ -544,10 +585,24 @@ TcpServer::TcpServerChangeState(
              RemoveTcpClient(tcp_client);
              tcp_client->TcpClientAbort();
              n_clients_connected--;
-             sem_post(&semaphore_wait_for_client_operation_complete);
+             sem_post(&semaphore_wait_for_server_thread_update);
              rc = true;
         }
         break;
+        case tcp_server_force_close_client_connection:
+             assert(tcp_client);
+             assert(tcp_client->tcp_conn->comm_sock_fd);
+             FD_CLR (tcp_client->tcp_conn->comm_sock_fd, &this->backup_client_fds);
+             remove_from_fd_array(tcp_client->tcp_conn->comm_sock_fd);
+             if (tcp_notif &&  tcp_notif->client_disconnected) {
+                tcp_notif->client_disconnected(tcp_client);
+             }
+             RemoveTcpClient(tcp_client);
+             tcp_client->TcpClientAbort();
+             n_clients_connected--;
+             sem_post(&semaphore_wait_for_server_thread_update);
+             rc = true;
+             break;
         case tcp_server_operations_max:
         break;
         default:
