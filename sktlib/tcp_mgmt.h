@@ -25,6 +25,8 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <list>
+#include <string>
+#include "network_utils.h"
 
 #define MAX_CLIENT_SUPPORTED    100
 #define TCP_CONN_RECV_BUFFER_SIZE    1028
@@ -95,6 +97,7 @@ class TcpConn {
     void SetExpirationInterval(uint16_t exp_interval_in_sec);
     void Abort();
     uint32_t SendMsg(char *msg, uint32_t msg_size);
+    void Display();
 };
 
 class TcpClient {
@@ -112,6 +115,7 @@ class TcpClient {
     bool TcpClientConnect(uint32_t server_ip, uint16_t server_port);  
     void TcpClientDisConnect();
     void TcpClientAbort();
+    void Display();
 };
 
 
@@ -123,27 +127,38 @@ class TcpServerNotification {
     void (*client_msg_recvd)(const TcpClient*, unsigned char *, uint16_t);
 };
 
+typedef enum {
+
+    TCP_SERVER_STATE_LISTENING = 1,
+    TCP_SERVER_STATE_ACCEPTING_CONNECTIONS = 2,
+    TCP_SERVER_STATE_MAX
+} tsp_server_state_t;
+
 class TcpServer {
 
     private:
         int16_t fd_array[MAX_CLIENT_SUPPORTED + 2]; 
         uint16_t GetMaxFd();
-        int n_clients_connected;
         void add_to_fd_array(uint16_t fd);
         void remove_from_fd_array(uint16_t fd);
+        int n_clients_connected;
         uint32_t dummy_master_skt_fd;
         pthread_t server_thread;
         TcpServerNotification *tcp_notif;
         sem_t semaphore_wait_for_thread_start;
         sem_t semaphore_wait_for_client_operation_complete;
-        bool accept_new_conn;
+        uint8_t tcp_server_state_flags;
         fd_set active_client_fds;
         fd_set backup_client_fds;
         tcp_server_operations_t server_pending_operation;
         TcpClient *pending_tcp_client;
         bool TcpServerChangeState(TcpClient *, tcp_server_operations_t);
+        void TcpServerSetState(uint8_t flag);
+        void TcpServerClearState(uint8_t flag);\
+        uint8_t TcpServerGetStateFlag();
 
     public:
+        std::string name;
         uint32_t self_ip_addr;
         uint16_t self_port_no;
         std::list<TcpClient *> tcp_client_conns;
@@ -153,12 +168,13 @@ class TcpServer {
         TcpServer();
         ~TcpServer();
         void *TcpServerThreadFn();
+        void Display();
         void StopAcceptingNewConnections();
         void StopListeningAllClients();
         void ResumeListeningAllClients();
         void StopListeningClient();
         void ResumeListeningClient();
-        TcpServer(const uint32_t &self_ip_addr, const uint16_t &self_port_no);
+        TcpServer(const uint32_t &self_ip_addr, const uint16_t &self_port_no, std::string name);
         TcpClient *GetTcpClientbyFd(uint16_t fd);
         TcpClient *GetTcpClient(uint32_t ip_addr, uint16_t port_no);
         void RemoveTcpClient(TcpClient *tcp_client);

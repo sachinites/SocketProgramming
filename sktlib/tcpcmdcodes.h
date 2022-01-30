@@ -17,6 +17,7 @@
 #define TCP_SERVER_SHOW_ONE_CLIENT_STATS    13 // show tcp-server <name> client <ip-addr> stats
 #define TCP_SERVER_STOP_LISTENING_CLIENTS   14  // config tcp-server <name> [no] client listen
 #define TCP_SERVER_STOP_LISTENING_ONE_CLIENT   15  // config tcp-server <name> [no] client <ip-addr> listen
+#define TCP_SERVER_START    16 // config tcp-server <name> start
 
 /* TCP Client Operations */
 #define TCP_CLIENT_CREATE   1 // config tcp-client <name> [<src-ip-addr>] [<src-port-no>]

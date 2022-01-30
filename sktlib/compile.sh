@@ -4,10 +4,11 @@ cd CommandParser
 make clean
 cd ..
 g++ -g -c tcp_mgmt.cpp -o tcp_mgmt.o
-g++ -g -c tcp_cli.cpp -o tcp_cli.o
-g++ -g -c main.cpp -o main.o
+g++ -g -c app_cli.cpp -o app_cli.o
+g++ -g -c app_main.cpp -o app_main.o
 g++ -g -c tcp_cli_handler.cpp -o tcp_cli_handler.o
+g++ -g -c network_utils.cpp -o network_utils.o
 cd CommandParser
 make
 cd ..
-g++ -g tcp_mgmt.o tcp_cli.o main.o tcp_cli_handler.o -o tcp_server.exe -L CommandParser/ -lcli -lpthread  -lrt
+g++ -g tcp_mgmt.o app_cli.o app_main.o tcp_cli_handler.o network_utils.o -o app.exe -L CommandParser/ -lcli -lpthread  -lrt

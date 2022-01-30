@@ -30,6 +30,37 @@ TcpConn::SendMsg(char *msg, uint32_t msg_size) {
     return 0;
 }
 
+void
+TcpConn::Display() {
+
+    const char *state;
+    printf ("comm_fd = %d\n", comm_sock_fd);
+    printf ("conn origin = %s\n", 
+        conn_origin == tcp_via_accept ? "tcp_via_accept" : "tcp_via_connect");
+    switch (conn_state)
+    {
+    case TCP_DISCONNECTED:
+        state = "TCP_DISCONNECTED";
+        break;
+    case TCP_KA_PENDING:
+    state = "TCP_KA_PENDING";
+    break;
+    case TCP_PEER_CLOSED:
+    state = "TCP_PEER_CLOSED";
+    break;
+    case TCP_ESTABLISHED:
+    state = "TCP_ESTABLISHED";
+    break;
+    default:;
+    }
+    printf ("conn state = %s\n", state);
+    printf ("peer : [%s %d]\n", network_covert_ip_n_to_p(peer_addr, NULL), peer_port_no);
+    printf ("self :  [%s %d]\n", network_covert_ip_n_to_p(self_addr, NULL), self_port_no);
+    printf ("ka interval : %d       ka recvd : %d        ka sent : %d\n",
+            ka_interval, ka_recvd, ka_sent);
+}
+
+
 uint16_t
 TcpServer::GetMaxFd() {
 
@@ -87,11 +118,14 @@ TcpServer::TcpServer() {
     for ( i = 0 ; i < array_size; i++) {
         this->fd_array[i] = -1;
     }
+
+    this->self_ip_addr = 2130706433; // 127.0.0.1
+    this->self_port_no = TCP_DEFAULT_PORT_NO;
     sem_init(&semaphore_wait_for_client_operation_complete, 0 , 0);
-    accept_new_conn = true;
+    name = "Default";
 }
 
-TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no) {
+TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no, std::string name) {
 
     int i;
     int array_size = sizeof(this->fd_array) / sizeof(this->fd_array[0]);
@@ -104,7 +138,7 @@ TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no)
     this->self_ip_addr = self_ip_addr;
     this->self_port_no = self_port_no;
     sem_init(&semaphore_wait_for_client_operation_complete, 0 , 0);
-    accept_new_conn = true;
+    this->name = name;
 }
 
 TcpServer::~TcpServer() { }
@@ -197,6 +231,7 @@ TcpServer::TcpServerThreadFn() {
     FD_SET(tcp_server->master_skt_fd, &tcp_server->backup_client_fds);
     FD_SET(tcp_server->dummy_master_skt_fd, &tcp_server->backup_client_fds);
     add_to_fd_array(tcp_server->master_skt_fd);
+    TcpServerSetState(TCP_SERVER_STATE_ACCEPTING_CONNECTIONS);
     add_to_fd_array(tcp_server->dummy_master_skt_fd);
 
     uint16_t max_fd = GetMaxFd();
@@ -208,7 +243,7 @@ TcpServer::TcpServerThreadFn() {
         memcpy(&tcp_server->active_client_fds,
                       &tcp_server->backup_client_fds, sizeof(fd_set));
 
-         printf ("Server blocked on select\n");
+         printf ("\nServer blocked on select\n");
          select( max_fd +1 , &tcp_server->active_client_fds, NULL, NULL, NULL);
 
          if (FD_ISSET(tcp_server->master_skt_fd, &tcp_server->active_client_fds)){
@@ -218,12 +253,14 @@ TcpServer::TcpServerThreadFn() {
                                                         (struct sockaddr *)&client_addr, &addr_len);
 
             if (comm_socket_fd < 0 ){
-                printf ("Error : Bad Comm FD returned by accept\n");
+                printf ("\nError : Bad Comm FD returned by accept\n");
                 continue;
             }
 
-            if (tcp_server->accept_new_conn == false) {
-                printf ("Tcp Server is not accepting new connections\n");
+            if ((tcp_server->TcpServerGetStateFlag() & 
+                TCP_SERVER_STATE_ACCEPTING_CONNECTIONS) !=
+                 TCP_SERVER_STATE_ACCEPTING_CONNECTIONS) {
+                printf ("\nTcp Server is not accepting new connections\n");
                 close(comm_socket_fd);
                 continue;
             }
@@ -240,8 +277,8 @@ TcpServer::TcpServerThreadFn() {
             tcp_conn->comm_sock_fd = comm_socket_fd;
             tcp_conn->conn_state = TCP_ESTABLISHED;
             tcp_conn->conn_origin = tcp_via_accept;
-            tcp_conn->peer_addr = client_addr.sin_addr.s_addr;
-            tcp_conn->peer_port_no = client_addr.sin_port;
+            tcp_conn->peer_addr = htonl(client_addr.sin_addr.s_addr);
+            tcp_conn->peer_port_no = htons(client_addr.sin_port);
             tcp_conn->self_port_no = tcp_server->self_port_no;
             tcp_conn->self_addr = tcp_server->self_ip_addr;
             TcpClient *tcp_client = new TcpClient();
@@ -261,12 +298,16 @@ TcpServer::TcpServerThreadFn() {
              case tcp_server_operation_none:
                  break;
              case tcp_server_stop_listening_client:
+                 rc = TcpServerChangeState(pending_tcp_client, opn);
                  break;
              case tcp_server_resume_listening_client:
+                rc = TcpServerChangeState(pending_tcp_client, opn);    
                  break;
              case tcp_server_stop_accepting_new_connections:
+                rc = TcpServerChangeState(NULL, opn);
                  break;
              case tcp_server_resume_accepting_new_connections:
+                rc = TcpServerChangeState(NULL, opn);
                  break;
              case tcp_server_close_client_connection:
                 rc = TcpServerChangeState(pending_tcp_client, opn);
@@ -310,12 +351,15 @@ TcpServer::TcpServerThreadFn() {
                         tcp_client->TcpClientAbort();
                          n_clients_connected--;
                         max_fd = GetMaxFd();
-                        continue;
+                        break;
                     }
 
-                    if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_msg_recvd)
-                    {
-                        tcp_server->tcp_notif->client_msg_recvd(tcp_client, tcp_client->tcp_conn->recv_buffer, tcp_client->tcp_conn->bytes_recvd);
+                    if (tcp_client->tcp_conn->bytes_recvd &&
+                         tcp_server->tcp_notif &&
+                         tcp_server->tcp_notif->client_msg_recvd) {
+                        tcp_server->tcp_notif->client_msg_recvd(tcp_client, 
+                                tcp_client->tcp_conn->recv_buffer,
+                                tcp_client->tcp_conn->bytes_recvd);
                     }
                 }
             } // for loop ends
@@ -354,6 +398,23 @@ void TcpServer::Start() {
     }
 
     printf ("TcpServer Thread Created Successfully\n");
+    TcpServerSetState(TCP_SERVER_STATE_LISTENING);
+}
+
+void
+TcpServer::TcpServerSetState(uint8_t flag) {
+
+    this->tcp_server_state_flags |= flag;
+}
+void
+TcpServer::TcpServerClearState(uint8_t flag) {
+
+    this->tcp_server_state_flags &= (~flag);
+}
+uint8_t
+TcpServer::TcpServerGetStateFlag() {
+
+    return this->tcp_server_state_flags;
 }
 
 void
@@ -457,11 +518,11 @@ TcpServer::TcpServerChangeState(
         rc = true;
         break;
         case tcp_server_stop_accepting_new_connections:
-        this->accept_new_conn = false;
+        TcpServerClearState(TCP_SERVER_STATE_ACCEPTING_CONNECTIONS);
         rc = true;
         break;
         case tcp_server_resume_accepting_new_connections:
-        this->accept_new_conn = true;
+        TcpServerSetState(TCP_SERVER_STATE_ACCEPTING_CONNECTIONS);
         rc = true;
         break;
         case tcp_server_close_client_connection:
@@ -491,8 +552,30 @@ TcpServer::TcpServerChangeState(
     return rc;
 }
 
+void
+TcpServer::Display() {
 
+    TcpClient *tcp_client;
+    std::list<TcpClient *>::iterator it;
+    TcpServer *tcp_server = this;
 
+    printf ("%s  [ %s , %d, %d ]\n", tcp_server->name.c_str(),
+                network_covert_ip_n_to_p(tcp_server->self_ip_addr, NULL),
+                tcp_server->master_skt_fd,
+                tcp_server->dummy_master_skt_fd);
+
+    printf (" State flags : 0x%x\n", tcp_server->TcpServerGetStateFlag());
+    printf (" # Connected Clients : %d\n", tcp_server->n_clients_connected);
+
+    for ( it = tcp_server->tcp_client_conns.begin(); 
+            it != tcp_server->tcp_client_conns.end(); ++it) {
+
+        tcp_client = *it;
+        printf ("Client : \n");
+        tcp_client->Display();
+        printf ("\n\n");
+    }
+}
 
 /* TcpClient */
 TcpClient::TcpClient() {
@@ -503,6 +586,19 @@ TcpClient::TcpClient() {
 TcpClient::~TcpClient() {
 
     assert(!ref_count);
+}
+
+void
+TcpClient::Display() {
+
+    printf ("retry timer interval = %d\n", retry_time_interval);
+    printf ("ref count = %d\n", ref_count);
+    printf ("listen by server : %s\n", listen_by_server ? "yes" : "no");
+    printf ("Tcp Conn = %p\n", tcp_conn);
+    if (tcp_conn) {
+        printf ("Conn : \n");
+        tcp_conn->Display();
+    }
 }
 
 bool
