@@ -332,6 +332,7 @@ TcpServer::TcpServerThreadFn() {
                 if (rc) max_fd = GetMaxFd();
                 break;
             case tcp_server_shut_down:
+                rc = TcpServerChangeState(NULL, opn);
                 pthread_exit(NULL);
              case tcp_server_operations_max:
              default:;
@@ -431,10 +432,16 @@ TcpServer::Stop() {
     3. Close Master and dummy skt FD
     4.  Free Server
     */
-   ForceDisconnectAllClients();
-   this->server_pending_operation = tcp_server_shut_down;
-   TcpSelfConnect();
-   pthread_join(this->server_thread, NULL);
+   //ForceDisconnectAllClients();
+   if (this->n_clients_connected) {
+       this->server_pending_operation = tcp_server_shut_down;
+       TcpSelfConnect();
+       pthread_join(this->server_thread, NULL);
+   }
+   else {
+       pthread_cancel(this->server_thread);
+   }
+  
    close (this->dummy_master_skt_fd);
    close (this->master_skt_fd);
    delete this->tcp_notif;
@@ -603,6 +610,33 @@ TcpServer::TcpServerChangeState(
              sem_post(&semaphore_wait_for_server_thread_update);
              rc = true;
              break;
+        case tcp_server_shut_down:
+        {
+            std::list<TcpClient *>::iterator it;
+            TcpClient *next_tcp_client, *curr_tcp_client;
+            int i = this->n_clients_connected;
+            for (it = tcp_client_conns.begin(); it != tcp_client_conns.end(); *it = next_tcp_client)
+            {
+                curr_tcp_client = *it;
+                if (!curr_tcp_client)
+                    break;
+                next_tcp_client = *(++it);
+
+                assert(curr_tcp_client->tcp_conn->comm_sock_fd);
+                FD_CLR(curr_tcp_client->tcp_conn->comm_sock_fd, &this->backup_client_fds);
+                remove_from_fd_array(curr_tcp_client->tcp_conn->comm_sock_fd);
+                if (tcp_notif && tcp_notif->client_disconnected)
+                {
+                    tcp_notif->client_disconnected(tcp_client);
+                }
+                RemoveTcpClient(curr_tcp_client);
+                curr_tcp_client->TcpClientAbort();
+                n_clients_connected--;
+            }
+            printf ("No of clients Disconnected = %d\n", i);
+            rc = true;
+        }
+        break;
         case tcp_server_operations_max:
         break;
         default:
