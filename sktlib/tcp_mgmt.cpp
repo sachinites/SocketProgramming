@@ -24,10 +24,21 @@ TcpConn::Abort() {
 
 }
 
-uint32_t
+int
 TcpConn::SendMsg(char *msg, uint32_t msg_size) {
 
-    return 0;
+    if (this->comm_sock_fd == 0) return -1;
+
+    struct sockaddr_in dest;
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(this->peer_port_no);
+    dest.sin_addr.s_addr = htonl(this->peer_addr);
+    int rc = sendto(this->comm_sock_fd, msg, msg_size, 0, (struct sockaddr *)&dest, sizeof(struct sockaddr));
+    if (rc < 0) {
+        printf ("sendto failed\n");
+    }
+    this->ka_sent++;
+    return rc;
 }
 
 void
@@ -123,6 +134,7 @@ TcpServer::TcpServer() {
     this->self_port_no = TCP_DEFAULT_PORT_NO;
     sem_init(&semaphore_wait_for_server_thread_update, 0 , 0);
     name = "Default";
+    memcpy(this->ka_msg, "Default KA Msg\0", strlen("Default KA Msg\0"));
 }
 
 TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no, std::string name) {
@@ -139,6 +151,7 @@ TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no,
     this->self_port_no = self_port_no;
     sem_init(&semaphore_wait_for_server_thread_update, 0 , 0);
     this->name = name;
+    memcpy(this->ka_msg, "Default KA Msg\0", strlen("Default KA Msg\0"));
 }
 
 TcpServer::~TcpServer() { 
@@ -172,7 +185,7 @@ TcpServer::TcpServerThreadFn() {
     struct sockaddr_in server_addr;
     server_addr.sin_family      = AF_INET;
     server_addr.sin_port        = htons(tcp_server->self_port_no);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_addr.s_addr = INADDR_ANY; /* htonl(tcp_server->self_ip_addr);*/
 
     if (setsockopt(tcp_server->master_skt_fd, SOL_SOCKET,
                    SO_REUSEADDR, (char *)&opt, sizeof(opt))<0) {
@@ -457,6 +470,10 @@ TcpServer::Stop() {
    sem_destroy(&this->semaphore_wait_for_server_thread_update);
    assert(!this->pending_tcp_client);
    assert(this->tcp_client_conns.empty());
+   if (this->ka_timer) {
+       delete_timer(this->ka_timer);
+       this->ka_timer = NULL;
+   }
    delete this;
 }
 
@@ -724,7 +741,7 @@ void
 
         FD_CLR(tcp_client->tcp_conn->comm_sock_fd, &client_fd);
         FD_SET(tcp_client->tcp_conn->comm_sock_fd, &client_fd);
-
+        printf ("client blocked on select()\n");
         select(tcp_client->tcp_conn->comm_sock_fd + 1, &client_fd, NULL, NULL, NULL);
         pthread_testcancel();
 
@@ -794,9 +811,41 @@ TcpServer::TcpServerCreateMultithreadedClient(
    sem_wait(&this->semaphore_wait_for_thread_start);
 }
 
+void TcpServer::TcpServer_KA_Dispatch_fn() {
+
+    std::list<TcpClient *>::iterator it;
+    TcpClient *tcp_client;
+    for (it = this->tcp_client_conns.begin(); it != this->tcp_client_conns.end(); ++it) {
+        tcp_client = *it;
+        tcp_client->tcp_conn->SendMsg(this->ka_msg, sizeof(this->ka_msg));
+    }
+}
+
+static void
+TcpServer_KA_Dispatch_fn_internal(Timer_t *timer, void *arg) {
+
+    TcpServer *tcp_server = (TcpServer *)arg;
+    tcp_server->TcpServer_KA_Dispatch_fn();
+}
+
 void
 TcpServer::Apply_ka_interval() {
-    
+
+    if (this->ka_timer && is_timer_running(this->ka_timer)) {
+       delete_timer(this->ka_timer);
+       this->ka_timer = NULL;
+    }
+
+    if (this->ka_interval == 0) return;
+
+    this->ka_timer = setup_timer(TcpServer_KA_Dispatch_fn_internal, 
+                                this->ka_interval * 1000,
+                                this->ka_interval * 1000,
+                                0, (void *)this,
+                                false);
+
+    start_timer(this->ka_timer);
+    assert(this->ka_timer);
 }
 
 /* TcpClient */
@@ -891,4 +940,15 @@ TcpClient::TcpClientAbort() {
     if (ref_count == 0) {
         delete this;
     }
+}
+
+void TcpClient::StartExpirationTimer() {
+    
+
+}
+void TcpClient::CancelExpirationTimer() {
+
+}
+void TcpClient::DeleteExpirationTimer() {
+
 }

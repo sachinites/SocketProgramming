@@ -26,6 +26,7 @@
 #include <semaphore.h>
 #include <list>
 #include <string>
+#include "timerlib.h"
 #include "network_utils.h"
 
 #define MAX_CLIENT_SUPPORTED    100
@@ -98,7 +99,7 @@ class TcpConn {
     void SetKaSendInterval(uint16_t ka_interval_in_sec);
     void SetExpirationInterval(uint16_t exp_interval_in_sec);
     void Abort();
-    uint32_t SendMsg(char *msg, uint32_t msg_size);
+    int SendMsg(char *msg, uint32_t msg_size);
     void Display();
 };
 
@@ -113,6 +114,10 @@ class TcpClient {
     bool listen_by_server;
     pthread_t *client_thread;
     TcpServer *tcp_server;
+    Timer_t *expiration_timer;
+    void StartExpirationTimer();
+    void CancelExpirationTimer();
+    void DeleteExpirationTimer();
     
     /* Methods */
     TcpClient();
@@ -161,7 +166,8 @@ class TcpServer {
         TcpClient *pending_tcp_client;
         bool TcpServerChangeState(TcpClient *, tcp_server_operations_t);
         void TcpServerCreateMultithreadedClient(uint16_t , struct sockaddr_in *);
-        timer_t ka_timer;
+        Timer_t *ka_timer;
+        
         
     public:
         std::string name;
@@ -170,11 +176,13 @@ class TcpServer {
         std::list<TcpClient *> tcp_client_conns;
         uint32_t master_skt_fd;
         uint16_t ka_interval;
+        char ka_msg[32];
 
         /* Methods */
         TcpServer();
         ~TcpServer();
         void *TcpServerThreadFn();
+        void TcpServer_KA_Dispatch_fn();
         void Display();
         void StopAcceptingNewConnections();
         void StopListeningAllClients();

@@ -99,6 +99,7 @@ config_tcp_server_handler (param_t *param,
                 return -1;
             }
             tcp_server->ka_interval = ka_interval;
+            tcp_server->Apply_ka_interval();
             break;
         default:
             ;
@@ -146,9 +147,14 @@ tcp_build_config_cli_tree() {
             {
                 /* config tcp-server <name> [no] ka-interval <N> */
                 static param_t ka_interval;
-                init_param(&ka_interval, CMD, "ka-interval", config_tcp_server_handler, 0, INVALID, 0, "config KA Interval");
+                init_param(&ka_interval, CMD, "ka-interval", 0, 0, INVALID, 0, "config KA Interval");
                 libcli_register_param(&tcp_server_name, &ka_interval);
-                set_param_cmd_code(&ka_interval, TCP_SERVER_ALL_CLIENTS_SET_KA_INTERVAL);
+                {
+                     static param_t ka_interval_val;
+                     init_param(&ka_interval_val, LEAF, 0, config_tcp_server_handler, 0,  INT, "ka-interval", "config tAK interval value in sec");
+                     libcli_register_param(&ka_interval, &ka_interval_val);
+                    set_param_cmd_code(&ka_interval_val, TCP_SERVER_ALL_CLIENTS_SET_KA_INTERVAL);
+                }
             }
             {
                  /* config tcp-server <name> [<ip-addr>] */
