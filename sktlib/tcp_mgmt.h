@@ -161,14 +161,15 @@ class TcpServer {
         TcpClient *pending_tcp_client;
         bool TcpServerChangeState(TcpClient *, tcp_server_operations_t);
         void TcpServerCreateMultithreadedClient(uint16_t , struct sockaddr_in *);
+        timer_t ka_timer;
         
-
     public:
         std::string name;
         uint32_t self_ip_addr;
         uint16_t self_port_no;
         std::list<TcpClient *> tcp_client_conns;
         uint32_t master_skt_fd;
+        uint16_t ka_interval;
 
         /* Methods */
         TcpServer();
@@ -184,6 +185,7 @@ class TcpServer {
         uint8_t TcpServerGetStateFlag();
         void ResumeListeningClient();
         void MultiThreadedClientThreadServiceFn(TcpClient *);
+        void Apply_ka_interval();
         TcpServer(const uint32_t &self_ip_addr, const uint16_t &self_port_no, std::string name);
         TcpClient *GetTcpClientbyFd(uint16_t fd);
         TcpClient *GetTcpClient(uint32_t ip_addr, uint16_t port_no);

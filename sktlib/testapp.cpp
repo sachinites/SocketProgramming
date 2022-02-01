@@ -25,7 +25,9 @@ main(int argc, char **argv) {
     server1->RegisterClientDisConnectCbk(client_disconnect_notif);
     server1->RegisterClientMsgRecvCbk(client_recv_msg);
     server1->RegisterClientConnectCbk(client_connect_notif);
+    server1->TcpServerSetState(TCP_SERVER_STATE_MULTITHREADED_MODE);
     server1->Start();
+    sleep(100);
     server1->Stop();
     return 0;
 }

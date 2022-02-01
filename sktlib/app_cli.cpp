@@ -19,12 +19,13 @@ config_tcp_server_handler (param_t *param,
 
     int rc = 0;
     int CMDCODE;
+    uint16_t ka_interval;
     tlv_struct_t *tlv = NULL;
     TcpServer *tcp_server = NULL;
     const char *ip_addr = "127.0.0.1";
     const char *tcp_server_name = NULL;
     uint16_t port_no = TCP_DEFAULT_PORT_NO;
-
+    
     CMDCODE = EXTRACT_CMD_CODE(tlv_buf);
 
     TLV_LOOP_BEGIN(tlv_buf, tlv){
@@ -35,6 +36,8 @@ config_tcp_server_handler (param_t *param,
             ip_addr = tlv->value;
         else if (strncmp(tlv->leaf_id, "tcp-server-port", strlen("tcp-server-port")) ==0)
             port_no = atoi(tlv->value);
+        else if (strncmp(tlv->leaf_id, "ka-interval", strlen("ka-interval")) ==0)
+            ka_interval =  atoi(tlv->value);
         else
             assert(0);
     } TLV_LOOP_END;
@@ -89,6 +92,14 @@ config_tcp_server_handler (param_t *param,
                     break;
                 default: ;
             }
+        case TCP_SERVER_ALL_CLIENTS_SET_KA_INTERVAL:
+             tcp_server = TcpServer_lookup(std::string(tcp_server_name));
+            if (!tcp_server) {
+                printf("Error : Tcp Server do not Exist\n");
+                return -1;
+            }
+            tcp_server->ka_interval = ka_interval;
+            break;
         default:
             ;
     }
@@ -112,22 +123,32 @@ tcp_build_config_cli_tree() {
             libcli_register_param(&tcp_server, &tcp_server_name);
             set_param_cmd_code(&tcp_server_name, TCP_SERVER_CREATE);
             {
+                /* config tcp-server <name> start*/
                 static param_t start;
                 init_param(&start, CMD, "start", config_tcp_server_handler, 0, INVALID, 0, "start tcp-server");
                 libcli_register_param(&tcp_server_name, &start);
                 set_param_cmd_code(&start, TCP_SERVER_START);
             }
             {
+                /* config tcp-server <name> stop*/
                 static param_t stop;
                 init_param(&stop, CMD, "abort", config_tcp_server_handler, 0, INVALID, 0, "stop tcp-server");
                 libcli_register_param(&tcp_server_name, &stop);
                 set_param_cmd_code(&stop, TCP_SERVER_ABORT);
             }
              {
+                 /* config tcp-server <name>  multi-threaded-mode*/
                 static param_t multi_threaded_mode;
                 init_param(&multi_threaded_mode, CMD, "multi-threaded-mode", config_tcp_server_handler, 0, INVALID, 0, "create multi-threaded clients");
                 libcli_register_param(&tcp_server_name, &multi_threaded_mode);
                 set_param_cmd_code(&multi_threaded_mode, TCP_SERVER_SET_MULTITHREADED_MODE);
+            }
+            {
+                /* config tcp-server <name> [no] ka-interval <N> */
+                static param_t ka_interval;
+                init_param(&ka_interval, CMD, "ka-interval", config_tcp_server_handler, 0, INVALID, 0, "config KA Interval");
+                libcli_register_param(&tcp_server_name, &ka_interval);
+                set_param_cmd_code(&ka_interval, TCP_SERVER_ALL_CLIENTS_SET_KA_INTERVAL);
             }
             {
                  /* config tcp-server <name> [<ip-addr>] */

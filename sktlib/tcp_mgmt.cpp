@@ -714,6 +714,10 @@ void
     pthread_setcancelstate( PTHREAD_CANCEL_ENABLE, NULL);
     pthread_setcanceltype( PTHREAD_CANCEL_DEFERRED, NULL);
 
+    if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_connected) {
+        tcp_server->tcp_notif->client_connected(tcp_client);
+    }
+
     sem_post(&tcp_server->semaphore_wait_for_thread_start);
 
     while(true) {
@@ -749,10 +753,10 @@ void
             break;
         }
         else if (tcp_client->tcp_conn->bytes_recvd &&
-                         tcp_server->tcp_notif &&
-                         tcp_server->tcp_notif->client_msg_recvd) {
+                    tcp_server->tcp_notif &&
+                    tcp_server->tcp_notif->client_msg_recvd) {
 
-                        tcp_server->tcp_notif->client_msg_recvd(tcp_client, 
+            tcp_server->tcp_notif->client_msg_recvd(tcp_client, 
                                 tcp_client->tcp_conn->recv_buffer,
                                 tcp_client->tcp_conn->bytes_recvd);
          }
@@ -788,6 +792,11 @@ TcpServer::TcpServerCreateMultithreadedClient(
    tcp_client->client_thread = (pthread_t *)calloc ( 1, sizeof (pthread_t));
    pthread_create (tcp_client->client_thread, NULL, tcp_client_thread_fn, (void *)tcp_client);
    sem_wait(&this->semaphore_wait_for_thread_start);
+}
+
+void
+TcpServer::Apply_ka_interval() {
+    
 }
 
 /* TcpClient */

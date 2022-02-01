@@ -10,8 +10,8 @@
 #define TCP_SERVER_DISCONNECT_CLIENT    6 // run tcp-server <name> client disconnect <ip-addr> <port-no>
 #define TCP_SERVER_BLACK_LIST_CLIENT    7 // config tcp-server <name> [no] client black-list <ip-addr>
 #define TCP_SERVER_SHOW_TCP_SERVER  8   // show tcp-server <name>
-#define TCP_SERVER_ALL_CLIENTS_SET_KA_INTERVAL 9    // config tcp-server <name> [no] all-clients ka-interval <N>
-#define TCP_SERVER_ONE_CLIENT_SET_KA_INTERVAL 10    // config tcp-server <name> [no] client <ip-addr> ka-interval <N>
+#define TCP_SERVER_ALL_CLIENTS_SET_KA_INTERVAL 9    // config tcp-server <name> [no] ka-interval <N>
+#define TCP_SERVER_ONE_CLIENT_SET_KA_INTERVAL 10    // config tcp-server <name> [no] ka-interval <N> client <ip-addr> 
 #define TCP_SERVER_SET_MULTITHREADED_MODE   11  // config tcp-server <name> [no] multi-threaded
 #define TCP_SERVER_SET_MULTITHREADED_NODE_ONE_CLIENT    12 // config tcp-server <name> [no] client <ip-addr> multi-threaded
 #define TCP_SERVER_SHOW_ONE_CLIENT_STATS    13 // show tcp-server <name> client <ip-addr> stats
