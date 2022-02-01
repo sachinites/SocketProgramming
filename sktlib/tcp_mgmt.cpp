@@ -432,7 +432,7 @@ TcpServer::Stop() {
     3. Close Master and dummy skt FD
     4.  Free Server
     */
-   //ForceDisconnectAllClients();
+   //AbortAllClients();
    if (this->n_clients_connected) {
        this->server_pending_operation = tcp_server_shut_down;
        TcpSelfConnect();
@@ -502,7 +502,7 @@ TcpServer::TcpSelfConnect() {
 }
 
 void 
-TcpServer::DiscoconnectClient(TcpClient *tcp_client) {
+TcpServer::AbortClient(TcpClient *tcp_client) {
 
     assert (tcp_client->tcp_conn->comm_sock_fd);
     assert(tcp_client->tcp_conn->conn_state == TCP_ESTABLISHED);
@@ -514,7 +514,7 @@ TcpServer::DiscoconnectClient(TcpClient *tcp_client) {
 }
 
 void
-TcpServer::ForceDisconnectAllClients() {
+TcpServer::AbortAllClients() {
 
         std::list<TcpClient *>::iterator it;
         TcpClient *next_tcp_client, *curr_tcp_client;
@@ -522,7 +522,7 @@ TcpServer::ForceDisconnectAllClients() {
             curr_tcp_client = *it;
             if (!curr_tcp_client) return;
             next_tcp_client = *(++it);
-            DiscoconnectClient(curr_tcp_client);
+            AbortClient(curr_tcp_client);
         }
 }
 
@@ -534,6 +534,25 @@ TcpServer::RegisterClientDisConnectCbk (void (*cbk)(const TcpClient*)) {
     }
     this->tcp_notif->client_disconnected = cbk;
 }
+
+void 
+TcpServer::RegisterClientConnectCbk (void (*cbk)(const TcpClient*)) {
+
+    if (!this->tcp_notif) {
+        this->tcp_notif = new TcpServerNotification();
+    }
+    this->tcp_notif->client_connected = cbk;
+}
+
+void 
+TcpServer::RegisterClientMsgRecvCbk (void (*cbk)(const TcpClient*, unsigned char *, uint16_t)) {
+
+    if (!this->tcp_notif) {
+        this->tcp_notif = new TcpServerNotification();
+    }
+    this->tcp_notif->client_msg_recvd = cbk;
+}
+
 
     TcpClient *
     TcpServer::GetTcpClientbyFd(uint16_t fd) { 

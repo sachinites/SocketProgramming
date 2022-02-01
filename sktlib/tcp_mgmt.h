@@ -183,12 +183,12 @@ class TcpServer {
         void RemoveTcpClient(TcpClient *tcp_client);
         void Start();
         void TcpSelfConnect();
-        void ForceDisconnectAllClients();
-        void DiscoconnectClient(TcpClient *);
+        void AbortAllClients();
+        void AbortClient(TcpClient *);
         void Stop();
         void RegisterClientConnectCbk(void (*)(const TcpClient *));
         void RegisterClientDisConnectCbk(void (*)(const TcpClient *));
-        void RegisterClientMsgRecvCbk(void (*)(const TcpClient *, char *, uint16_t));
+        void RegisterClientMsgRecvCbk(void (*)(const TcpClient *, unsigned char *, uint16_t));
         void Cleanup();
 }; 
 
