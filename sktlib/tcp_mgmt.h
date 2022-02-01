@@ -102,6 +102,7 @@ class TcpConn {
     void Display();
 };
 
+class TcpServer;
 class TcpClient {
 
     public:
@@ -110,6 +111,8 @@ class TcpClient {
     uint8_t retry_time_interval;
     uint8_t ref_count;
     bool listen_by_server;
+    pthread_t *client_thread;
+    TcpServer *tcp_server;
     
     /* Methods */
     TcpClient();
@@ -134,6 +137,7 @@ typedef enum {
     TCP_SERVER_STATE_IDLE = 1,
     TCP_SERVER_STATE_LISTENING = 2,
     TCP_SERVER_STATE_ACCEPTING_CONNECTIONS = 4,
+    TCP_SERVER_STATE_MULTITHREADED_MODE = 8,
     TCP_SERVER_STATE_MAX
 } tsp_server_state_t;
 
@@ -156,9 +160,8 @@ class TcpServer {
         tcp_server_operations_t server_pending_operation;
         TcpClient *pending_tcp_client;
         bool TcpServerChangeState(TcpClient *, tcp_server_operations_t);
-        void TcpServerSetState(uint8_t flag);
-        void TcpServerClearState(uint8_t flag);\
-        uint8_t TcpServerGetStateFlag();
+        void TcpServerCreateMultithreadedClient(uint16_t , struct sockaddr_in *);
+        
 
     public:
         std::string name;
@@ -176,7 +179,11 @@ class TcpServer {
         void StopListeningAllClients();
         void ResumeListeningAllClients();
         void StopListeningClient();
+        void TcpServerSetState(uint8_t flag);
+        void TcpServerClearState(uint8_t flag);\
+        uint8_t TcpServerGetStateFlag();
         void ResumeListeningClient();
+        void MultiThreadedClientThreadServiceFn(TcpClient *);
         TcpServer(const uint32_t &self_ip_addr, const uint16_t &self_port_no, std::string name);
         TcpClient *GetTcpClientbyFd(uint16_t fd);
         TcpClient *GetTcpClient(uint32_t ip_addr, uint16_t port_no);

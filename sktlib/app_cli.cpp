@@ -73,6 +73,22 @@ config_tcp_server_handler (param_t *param,
             }
             tcp_server_lst.remove(tcp_server);
             tcp_server->Stop();
+            break;
+        case TCP_SERVER_SET_MULTITHREADED_MODE:
+             tcp_server = TcpServer_lookup(std::string(tcp_server_name));
+            if (!tcp_server) {
+                printf("Error : Tcp Server do not Exist\n");
+                return -1;
+            }
+            switch(enable_or_disable) {
+                case CONFIG_ENABLE:
+                    tcp_server->TcpServerSetState(TCP_SERVER_STATE_MULTITHREADED_MODE);
+                    break;
+                case CONFIG_DISABLE:
+                    tcp_server->TcpServerClearState(TCP_SERVER_STATE_MULTITHREADED_MODE);
+                    break;
+                default: ;
+            }
         default:
             ;
     }
@@ -107,6 +123,12 @@ tcp_build_config_cli_tree() {
                 libcli_register_param(&tcp_server_name, &stop);
                 set_param_cmd_code(&stop, TCP_SERVER_ABORT);
             }
+             {
+                static param_t multi_threaded_mode;
+                init_param(&multi_threaded_mode, CMD, "multi-threaded-mode", config_tcp_server_handler, 0, INVALID, 0, "create multi-threaded clients");
+                libcli_register_param(&tcp_server_name, &multi_threaded_mode);
+                set_param_cmd_code(&multi_threaded_mode, TCP_SERVER_SET_MULTITHREADED_MODE);
+            }
             {
                  /* config tcp-server <name> [<ip-addr>] */
                  static param_t tcp_server_addr;
@@ -121,6 +143,7 @@ tcp_build_config_cli_tree() {
                      set_param_cmd_code(&tcp_server_port, TCP_SERVER_CREATE);
                  }
             }
+             support_cmd_negation(&tcp_server_name);
         }
     }
 }

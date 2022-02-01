@@ -16,7 +16,7 @@ TcpConn::TcpConn() {
 }
 
 TcpConn::~TcpConn() {
-  
+    
 }
 
 void
@@ -268,6 +268,13 @@ TcpServer::TcpServerThreadFn() {
                 continue;
             }
 
+            if ((tcp_server->TcpServerGetStateFlag() &
+                    TCP_SERVER_STATE_MULTITHREADED_MODE)) {
+
+                    TcpServerCreateMultithreadedClient(comm_socket_fd, &client_addr);
+                    continue;
+            }
+
             FD_SET(comm_socket_fd, &tcp_server->backup_client_fds);
             n_clients_connected++;
             add_to_fd_array(comm_socket_fd);
@@ -285,6 +292,7 @@ TcpServer::TcpServerThreadFn() {
             tcp_conn->self_port_no = tcp_server->self_port_no;
             tcp_conn->self_addr = tcp_server->self_ip_addr;
             TcpClient *tcp_client = new TcpClient();
+            tcp_client->tcp_server = tcp_server;
             tcp_client->tcp_conn = tcp_conn;
             tcp_server->tcp_client_conns.push_back(tcp_client);
             /* Now send Connect notification */
@@ -572,6 +580,7 @@ TcpServer::RegisterClientMsgRecvCbk (void (*cbk)(const TcpClient*, unsigned char
     void
     TcpServer::RemoveTcpClient (TcpClient *tcp_client) {
          tcp_client_conns.remove(tcp_client);
+         tcp_client->tcp_server = NULL;
     }
 
 bool
@@ -642,8 +651,10 @@ TcpServer::TcpServerChangeState(
                 next_tcp_client = *(++it);
 
                 assert(curr_tcp_client->tcp_conn->comm_sock_fd);
-                FD_CLR(curr_tcp_client->tcp_conn->comm_sock_fd, &this->backup_client_fds);
-                remove_from_fd_array(curr_tcp_client->tcp_conn->comm_sock_fd);
+                if (!curr_tcp_client->client_thread) {
+                    FD_CLR(curr_tcp_client->tcp_conn->comm_sock_fd, &this->backup_client_fds);
+                    remove_from_fd_array(curr_tcp_client->tcp_conn->comm_sock_fd);
+                }
                 if (tcp_notif && tcp_notif->client_disconnected)
                 {
                     tcp_notif->client_disconnected(tcp_client);
@@ -689,6 +700,96 @@ TcpServer::Display() {
     }
 }
 
+void
+ TcpServer::MultiThreadedClientThreadServiceFn(TcpClient *tcp_client) {
+
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+
+    TcpServer *tcp_server = tcp_client->tcp_server;
+
+    fd_set client_fd;
+    FD_ZERO (&client_fd);
+
+    pthread_setcancelstate( PTHREAD_CANCEL_ENABLE, NULL);
+    pthread_setcanceltype( PTHREAD_CANCEL_DEFERRED, NULL);
+
+    sem_post(&tcp_server->semaphore_wait_for_thread_start);
+
+    while(true) {
+
+        FD_CLR(tcp_client->tcp_conn->comm_sock_fd, &client_fd);
+        FD_SET(tcp_client->tcp_conn->comm_sock_fd, &client_fd);
+
+        select(tcp_client->tcp_conn->comm_sock_fd + 1, &client_fd, NULL, NULL, NULL);
+        pthread_testcancel();
+
+        tcp_client->tcp_conn->bytes_recvd =
+                        recvfrom(tcp_client->tcp_conn->comm_sock_fd,
+                                        tcp_client->tcp_conn->recv_buffer,
+                                        TCP_CONN_RECV_BUFFER_SIZE,
+                                        0, (struct sockaddr *)&client_addr, &addr_len);
+
+        if (tcp_client->tcp_conn->bytes_recvd == 0) {
+
+            printf("Printf Client abrupt termination\n");
+
+            if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_disconnected) {
+                tcp_server->tcp_notif->client_disconnected(tcp_client);
+            }
+            
+            tcp_server->RemoveTcpClient(tcp_client);
+            close (tcp_client->tcp_conn->comm_sock_fd);
+            delete tcp_client->tcp_conn;
+            tcp_client->tcp_conn = NULL;
+            free(tcp_client->client_thread);
+            tcp_client->client_thread = NULL;
+            delete tcp_client;
+            tcp_server->n_clients_connected--;
+            break;
+        }
+        else if (tcp_client->tcp_conn->bytes_recvd &&
+                         tcp_server->tcp_notif &&
+                         tcp_server->tcp_notif->client_msg_recvd) {
+
+                        tcp_server->tcp_notif->client_msg_recvd(tcp_client, 
+                                tcp_client->tcp_conn->recv_buffer,
+                                tcp_client->tcp_conn->bytes_recvd);
+         }
+    }
+}
+
+void *
+tcp_client_thread_fn(void *arg) {
+
+    TcpClient *tcp_client = (TcpClient *)arg;
+    tcp_client->tcp_server->MultiThreadedClientThreadServiceFn(tcp_client);
+    return NULL;
+}
+
+void
+TcpServer::TcpServerCreateMultithreadedClient(
+                uint16_t comm_fd,
+                struct sockaddr_in *client_addr) {
+
+    TcpClient *tcp_client = new TcpClient();
+    tcp_client->tcp_server = this;
+    TcpConn *tcp_conn = new TcpConn();
+    tcp_conn->comm_sock_fd = comm_fd;
+    tcp_conn->conn_state = TCP_ESTABLISHED;
+    tcp_client->tcp_server->n_clients_connected++;
+    tcp_conn->conn_origin = tcp_via_accept;
+    tcp_conn->peer_addr = htonl(client_addr->sin_addr.s_addr);
+    tcp_conn->peer_port_no = htons(client_addr->sin_port);
+    tcp_conn->self_port_no = this->self_port_no;
+    tcp_conn->self_addr = this->self_ip_addr;
+    tcp_client->tcp_conn = tcp_conn;
+   this->tcp_client_conns.push_back(tcp_client);
+   tcp_client->client_thread = (pthread_t *)calloc ( 1, sizeof (pthread_t));
+   pthread_create (tcp_client->client_thread, NULL, tcp_client_thread_fn, (void *)tcp_client);
+   sem_wait(&this->semaphore_wait_for_thread_start);
+}
+
 /* TcpClient */
 TcpClient::TcpClient() {
 
@@ -705,7 +806,13 @@ TcpClient::Display() {
 
     printf ("retry timer interval = %d\n", retry_time_interval);
     printf ("ref count = %d\n", ref_count);
-    printf ("listen by server : %s\n", listen_by_server ? "yes" : "no");
+    if (client_thread) {
+        printf ("listen by server : Multi-threaded\n");
+    }
+    else {
+        printf ("listen by server : %s\n", listen_by_server ? "yes" : "no");
+    }
+    printf ("client thread = %p\n", client_thread);
     printf ("Tcp Conn = %p\n", tcp_conn);
     if (tcp_conn) {
         printf ("Conn : \n");
@@ -764,7 +871,14 @@ TcpClient::TcpClientAbort() {
     this->TcpClientDisConnect();
     delete this->tcp_conn;
     this->tcp_conn = NULL;
-    ref_count--;
+    if (this->client_thread) {
+        pthread_cancel(*this->client_thread);
+        free(this->client_thread);
+        this->client_thread = NULL;
+    }
+    else {
+         ref_count--;
+    }
     if (ref_count == 0) {
         delete this;
     }
