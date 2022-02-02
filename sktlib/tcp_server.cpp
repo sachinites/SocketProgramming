@@ -8,69 +8,9 @@
 #include <errno.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-#include "tcp_mgmt.h"
-
-/* Tcp Connection */
-TcpConn::TcpConn() {
-  
-}
-
-TcpConn::~TcpConn() {
-    
-}
-
-void
-TcpConn::Abort() {
-
-}
-
-int
-TcpConn::SendMsg(char *msg, uint32_t msg_size) {
-
-    if (this->comm_sock_fd == 0) return -1;
-
-    struct sockaddr_in dest;
-    dest.sin_family = AF_INET;
-    dest.sin_port = htons(this->peer_port_no);
-    dest.sin_addr.s_addr = htonl(this->peer_addr);
-    int rc = sendto(this->comm_sock_fd, msg, msg_size, 0, (struct sockaddr *)&dest, sizeof(struct sockaddr));
-    if (rc < 0) {
-        printf ("sendto failed\n");
-    }
-    this->ka_sent++;
-    return rc;
-}
-
-void
-TcpConn::Display() {
-
-    const char *state;
-    printf ("comm_fd = %d\n", comm_sock_fd);
-    printf ("conn origin = %s\n", 
-        conn_origin == tcp_via_accept ? "tcp_via_accept" : "tcp_via_connect");
-    switch (conn_state)
-    {
-    case TCP_DISCONNECTED:
-        state = "TCP_DISCONNECTED";
-        break;
-    case TCP_KA_PENDING:
-        state = "TCP_KA_PENDING";
-        break;
-    case TCP_PEER_CLOSED:
-        state = "TCP_PEER_CLOSED";
-        break;
-    case TCP_ESTABLISHED:
-        state = "TCP_ESTABLISHED";
-        break;
-    default:;
-    }
-    printf ("conn state = %s\n", state);
-    printf ("peer : [%s %d]\n", network_covert_ip_n_to_p(peer_addr, NULL), peer_port_no);
-    printf ("self :  [%s %d]\n", network_covert_ip_n_to_p(self_addr, NULL), self_port_no);
-    printf ("ka interval : %d       ka recvd : %d        ka sent : %d\n",
-            ka_interval, ka_recvd, ka_sent);
-}
-
+#include "tcp_server.h"
+#include "tcp_client.h"
+#include "tcp_conn.h"
 
 uint16_t
 TcpServer::GetMaxFd() {
@@ -85,7 +25,6 @@ TcpServer::GetMaxFd() {
             max_fd = this->fd_array[i];
         }
     }
-
     return max_fd;
 }
 
@@ -120,7 +59,7 @@ TcpServer::remove_from_fd_array(uint16_t fd) {
 }
 
 
-/* Tcp Server */
+/* Default Constructor */
 TcpServer::TcpServer() {
 
     int i;
@@ -131,13 +70,16 @@ TcpServer::TcpServer() {
     }
 
     this->self_ip_addr = 2130706433; // 127.0.0.1
-    this->self_port_no = TCP_DEFAULT_PORT_NO;
-    sem_init(&semaphore_wait_for_thread_start, 0 , 0);
-    name = "Default";
+    this->self_port_no = TCP_SERVER_DEFAULT_PORT_NO;
+    sem_init(&this->semaphore_wait_for_operation_complete, 0 , 0);
+    this->name = "Default";
     memcpy(this->ka_msg, "Default KA Msg\0", strlen("Default KA Msg\0"));
 }
 
-TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no, std::string name) {
+/* Non-default Constructor */
+TcpServer::TcpServer(const uint32_t& self_ip_addr,
+                                    const uint16_t& self_port_no,
+                                    std::string name) {
 
     int i;
     int array_size = sizeof(this->fd_array) / sizeof(this->fd_array[0]);
@@ -149,13 +91,22 @@ TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no,
 
     this->self_ip_addr = self_ip_addr;
     this->self_port_no = self_port_no;
-    sem_init(&semaphore_wait_for_thread_start, 0 , 0);
+    sem_init(&this->semaphore_wait_for_operation_complete, 0 , 0);
     this->name = name;
     memcpy(this->ka_msg, "Default KA Msg\0", strlen("Default KA Msg\0"));
 }
 
+/* In Destructors, check that TCPServer has really released all resources or not */
 TcpServer::~TcpServer() { 
 
+    assert(!this->master_skt_fd);
+    assert(!this->dummy_master_skt_fd);
+    assert(!this->n_clients_connected);
+    assert(!this->tcp_notif);
+    assert(this->server_pending_operation == tcp_server_operation_none);
+    assert(!this->pending_tcp_client);
+    assert(!this->ka_timer);
+    assert(this->tcp_client_conns.empty());
     printf ("%s TcpServer shut-down successfully\n", this->name.c_str());
 }
 
@@ -168,7 +119,7 @@ TcpServer::TcpServerThreadFn() {
     TcpServer *tcp_server = this;
     
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-    pthread_setcanceltype( PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+    pthread_setcanceltype( PTHREAD_CANCEL_DEFERRED, NULL);
 
     tcp_server->master_skt_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP );
     tcp_server->dummy_master_skt_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP );
@@ -178,7 +129,7 @@ TcpServer::TcpServerThreadFn() {
 
         printf("TCP Server Socket Creation Failed\n");
         /* Signal the main routine that thread routine fn has started */
-         sem_post(&tcp_server->semaphore_wait_for_thread_start);
+         sem_post(&tcp_server->semaphore_wait_for_operation_complete);
          pthread_exit(NULL);
     }
 
@@ -252,7 +203,7 @@ TcpServer::TcpServerThreadFn() {
 
     uint16_t max_fd = GetMaxFd();
 
-     sem_post(&tcp_server->semaphore_wait_for_thread_start);
+     sem_post(&tcp_server->semaphore_wait_for_operation_complete);
 
     while (true) {
 
@@ -261,6 +212,7 @@ TcpServer::TcpServerThreadFn() {
 
          printf ("\nServer blocked on select\n");
          select( max_fd +1 , &tcp_server->active_client_fds, NULL, NULL, NULL);
+         pthread_testcancel();
 
          if (FD_ISSET(tcp_server->master_skt_fd, &tcp_server->active_client_fds)){
 
@@ -339,9 +291,11 @@ TcpServer::TcpServerThreadFn() {
                  break;
              case tcp_server_stop_accepting_new_connections:
                 rc = TcpServerChangeState(NULL, opn);
+                assert(!pending_tcp_client);
                  break;
              case tcp_server_resume_accepting_new_connections:
                 rc = TcpServerChangeState(NULL, opn);
+                assert(!pending_tcp_client);
                  break;
              case tcp_server_close_client_connection:
                 rc = TcpServerChangeState(pending_tcp_client, opn);
@@ -353,8 +307,13 @@ TcpServer::TcpServerThreadFn() {
                 pending_tcp_client = NULL;
                 if (rc) max_fd = GetMaxFd();
                 break;
+            case tcp_server_force_close_all_client_connections:
+                rc  = TcpServerChangeState(NULL, opn);
+                break;
             case tcp_server_shut_down:
                 rc = TcpServerChangeState(NULL, opn);
+                assert(!pending_tcp_client);
+                server_pending_operation = tcp_server_operation_none;
                 pthread_exit(NULL);
              case tcp_server_operations_max:
              default:;
@@ -430,9 +389,9 @@ void TcpServer::Start() {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
-    sem_init(&this->semaphore_wait_for_thread_start, 0, 0);
+    sem_init(&this->semaphore_wait_for_operation_complete, 0, 0);
     pthread_create(&this->server_thread, &attr, tcp_server_fn, (void *)this);
-    sem_wait(&this->semaphore_wait_for_thread_start);
+    sem_wait(&this->semaphore_wait_for_operation_complete);
 
     if (this->master_skt_fd < 0 ||
         this->dummy_master_skt_fd < 0) {
@@ -448,13 +407,9 @@ void TcpServer::Start() {
 void
 TcpServer::Stop() {
 
-    /* 
-    1. Disconnect and Free all connected clients 
-    2. Cancel Server thread
-    3. Close Master and dummy skt FD
-    4.  Free Server
-    */
-   //AbortAllClients();
+   this->StopAcceptingNewConnections();
+   this->StopListeningAllClients();
+
    if (this->n_clients_connected) {
        this->server_pending_operation = tcp_server_shut_down;
        TcpSelfConnect();
@@ -465,11 +420,11 @@ TcpServer::Stop() {
    }
   
    close (this->dummy_master_skt_fd);
+   this->dummy_master_skt_fd = 0;
    close (this->master_skt_fd);
+   this->master_skt_fd = 0;
    delete this->tcp_notif;
-   sem_destroy(&this->semaphore_wait_for_thread_start);
-   assert(!this->pending_tcp_client);
-   assert(this->tcp_client_conns.empty());
+   sem_destroy(&this->semaphore_wait_for_operation_complete);
    if (this->ka_timer) {
        delete_timer(this->ka_timer);
        this->ka_timer = NULL;
@@ -517,9 +472,13 @@ TcpServer::TcpSelfConnect() {
         return;
     }
     
-    printf ("Waiting for client disconnection\n");
-    if (this->server_pending_operation != tcp_server_shut_down) {
-        sem_wait(&semaphore_wait_for_thread_start);
+    if (this->server_pending_operation == tcp_server_shut_down ||
+        this->server_pending_operation == tcp_server_send_ka_msg_all_clients) {
+        
+    }
+    else {
+         printf ("Waiting for client disconnection\n");
+         sem_wait(&this->semaphore_wait_for_operation_complete);
     }
     printf ("Client disconnection successful\n");
 
@@ -540,14 +499,18 @@ TcpServer::AbortClient(TcpClient *tcp_client) {
 void
 TcpServer::AbortAllClients() {
 
-        std::list<TcpClient *>::iterator it;
-        TcpClient *next_tcp_client, *curr_tcp_client;
-        for (it = tcp_client_conns.begin() ; it  != tcp_client_conns.end(); *it = next_tcp_client) {
-            curr_tcp_client = *it;
-            if (!curr_tcp_client) return;
-            next_tcp_client = *(++it);
-            AbortClient(curr_tcp_client);
-        }
+        this->server_pending_operation = tcp_server_force_close_all_client_connections;
+        this->TcpSelfConnect();
+}
+
+void
+TcpServer::StopListeningAllClients() {
+
+}
+
+void
+TcpServer::StopAcceptingNewConnections() {
+
 }
 
 void 
@@ -636,7 +599,7 @@ TcpServer::TcpServerChangeState(
              RemoveTcpClient(tcp_client);
              tcp_client->TcpClientAbort();
              n_clients_connected--;
-             sem_post(&semaphore_wait_for_thread_start);
+             sem_post(&semaphore_wait_for_operation_complete);
              rc = true;
         }
         break;
@@ -653,9 +616,10 @@ TcpServer::TcpServerChangeState(
              RemoveTcpClient(tcp_client);
              tcp_client->TcpClientAbort();
              n_clients_connected--;
-             sem_post(&semaphore_wait_for_thread_start);
+             sem_post(&semaphore_wait_for_operation_complete);
              rc = true;
              break;
+        case tcp_server_force_close_all_client_connections:
         case tcp_server_shut_down:
         {
             std::list<TcpClient *>::iterator it;
@@ -683,6 +647,19 @@ TcpServer::TcpServerChangeState(
             }
             printf ("No of clients Disconnected = %d\n", i);
             rc = true;
+            if (opn == tcp_server_force_close_all_client_connections) {
+                sem_post(&this->semaphore_wait_for_operation_complete);
+            }
+        }
+        break;
+        case  tcp_server_send_ka_msg_all_clients:
+        {
+            TcpClient *tcp_client;
+            std::list<TcpClient *>::iterator it;
+            for (it = tcp_client_conns.begin(); it != tcp_client_conns.end(); ++it) {
+                tcp_client = *it;
+                tcp_client->tcp_conn->SendMsg(this->ka_msg, sizeof(this->ka_msg));
+            }
         }
         break;
         case tcp_server_operations_max:
@@ -736,7 +713,7 @@ void
         tcp_server->tcp_notif->client_connected(tcp_client);
     }
 
-    sem_post(&tcp_server->semaphore_wait_for_thread_start);
+    sem_post(&tcp_server->semaphore_wait_for_operation_complete);
 
     while(true) {
 
@@ -754,20 +731,12 @@ void
 
         if (tcp_client->tcp_conn->bytes_recvd == 0) {
 
-            printf("Printf Client abrupt termination\n");
-
             if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_disconnected) {
                 tcp_server->tcp_notif->client_disconnected(tcp_client);
             }
             
-            tcp_server->RemoveTcpClient(tcp_client);
-            close (tcp_client->tcp_conn->comm_sock_fd);
-            delete tcp_client->tcp_conn;
-            tcp_client->tcp_conn = NULL;
-            free(tcp_client->client_thread);
-            tcp_client->client_thread = NULL;
-            delete tcp_client;
-            tcp_server->n_clients_connected--;
+            tcp_server->AbortClient(tcp_client);
+            pthread_testcancel();
             break;
         }
         else if (tcp_client->tcp_conn->bytes_recvd &&
@@ -810,23 +779,20 @@ TcpServer::TcpServerCreateMultithreadedClient(
    this->tcp_client_conns.push_back(tcp_client);
    tcp_client->client_thread = (pthread_t *)calloc ( 1, sizeof (pthread_t));
    pthread_create (tcp_client->client_thread, NULL, tcp_client_thread_fn, (void *)tcp_client);
-   sem_wait(&this->semaphore_wait_for_thread_start);
+   sem_wait(&this->semaphore_wait_for_operation_complete);
 }
 
 void TcpServer::TcpServer_KA_Dispatch_fn() {
 
-    std::list<TcpClient *>::iterator it;
-    TcpClient *tcp_client;
-    for (it = this->tcp_client_conns.begin(); it != this->tcp_client_conns.end(); ++it) {
-        tcp_client = *it;
-        tcp_client->tcp_conn->SendMsg(this->ka_msg, sizeof(this->ka_msg));
-    }
+    this->server_pending_operation = tcp_server_send_ka_msg_all_clients;
+    this->TcpSelfConnect();
 }
 
 static void
 TcpServer_KA_Dispatch_fn_internal(Timer_t *timer, void *arg) {
 
     TcpServer *tcp_server = (TcpServer *)arg;
+    if (tcp_server->tcp_client_conns.empty()) return;
     tcp_server->TcpServer_KA_Dispatch_fn();
 }
 
@@ -848,165 +814,4 @@ TcpServer::Apply_ka_interval() {
 
     start_timer(this->ka_timer);
     assert(this->ka_timer);
-}
-
-/* TcpClient */
-TcpClient::TcpClient() {
-
-    listen_by_server = true;
-}
-
-TcpClient::~TcpClient() {
-
-    assert(!ref_count);
-}
-
-void
-TcpClient::Display() {
-
-    printf ("retry timer interval = %d\n", retry_time_interval);
-    printf ("ref count = %d\n", ref_count);
-    if (client_thread) {
-        printf ("listen by server : Multi-threaded\n");
-    }
-    else {
-        printf ("listen by server : %s\n", listen_by_server ? "yes" : "no");
-    }
-    printf ("client thread = %p\n", client_thread);
-    
-    printf ("Expiration Timer Remaining (in msec )= %lu\n", 
-        timer_get_time_remaining_in_mill_sec(this->expiration_timer));
-
-    printf ("Tcp Conn = %p\n", tcp_conn);
-    if (tcp_conn) {
-        printf ("Conn : \n");
-        tcp_conn->Display();
-    }
-}
-
-bool
-TcpClient::TcpClientConnect(uint32_t server_ip, uint16_t server_port) {
-
-    int rc = 0;
-    int sock_fd = -1;
-
-    if ((sock_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1){
-        return false;
-    }
-
-    struct hostent *host;
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = server_port;
-    server_addr.sin_addr.s_addr = server_ip;
-
-    rc = connect(sock_fd, (struct sockaddr *)&server_addr,sizeof(struct sockaddr));
-
-    if( rc < 0) {
-        printf("connect failed , errno = %d\n", errno);
-        close(sock_fd);
-        return false;
-    }
-
-    this->tcp_conn->comm_sock_fd = sock_fd;
-    this->tcp_conn->conn_origin = tcp_via_connect;
-    this->tcp_conn->conn_state = TCP_ESTABLISHED;
-    this->tcp_conn->peer_addr = server_ip;
-    this->tcp_conn->peer_port_no = server_port;
-    //this->tcp_conn->self_addr = 0;
-    //this->tcp_conn->self_port_no = 0;  /* We dont have any port number when client connects via connect() */
-    return true;
-}
-
-void
-TcpClient::TcpClientDisConnect() {
-
-    if (this->tcp_conn->conn_state != TCP_ESTABLISHED) return;
-    close (this->tcp_conn->comm_sock_fd);
-    this->tcp_conn->comm_sock_fd = 0;
-    this->tcp_conn->conn_state = TCP_DISCONNECTED;
-}
-
-void
-TcpClient::TcpClientAbort() {
-
-    this->TcpClientDisConnect();
-    delete this->tcp_conn;
-    this->tcp_conn = NULL;
-    if (this->client_thread) {
-        pthread_cancel(*this->client_thread);
-        free(this->client_thread);
-        this->client_thread = NULL;
-    }
-    else {
-         ref_count--;
-    }
-    if (this->expiration_timer) {
-        delete_timer(this->expiration_timer);
-        this->expiration_timer = NULL;
-    }
-    if (ref_count == 0) {
-        delete this;
-    }
-}
-
-static void
-tcp_client_expiration_timer_expired(Timer_t *timer, void *arg) {
-
-    TcpClient *tcp_client = (TcpClient *)arg;
-    TcpServer *tcp_server = tcp_client->tcp_server;
-    
-    if (tcp_client->tcp_conn->conn_state == TCP_ESTABLISHED) {
-        tcp_client->tcp_conn->conn_state = TCP_KA_PENDING;
-        tcp_client->CancelExpirationTimer();
-        tcp_client->DeleteExpirationTimer();
-        tcp_client->expiration_timer = setup_timer(tcp_client_expiration_timer_expired,
-                                                                    TCP_CLIENT_HOLD_DOWN_TIMER * 1000,
-                                                                    TCP_CLIENT_HOLD_DOWN_TIMER * 1000,
-                                                                    0, (void *)tcp_client, false);
-        start_timer(tcp_client->expiration_timer);
-    }
-    else if (tcp_client->tcp_conn->conn_state == TCP_KA_PENDING) {
-        tcp_server->AbortClient(tcp_client);
-    }
-    else {
-        assert(0);
-    }
-}
-
-void
-TcpClient::StartExpirationTimer() {
-    
-    if (this->expiration_timer) return;
-
-    this->expiration_timer = setup_timer(tcp_client_expiration_timer_expired,
-                                                TCP_CLIENT_EXPIRATION_TIMER * 1000,
-                                                TCP_CLIENT_EXPIRATION_TIMER * 1000,
-                                                0,
-                                                (void *)this, false);
-
-    assert(this->expiration_timer);
-    start_timer(this->expiration_timer);
-}
-
-void TcpClient::CancelExpirationTimer() {
-
-        if (!this->expiration_timer) return;
-        if (!is_timer_running(this->expiration_timer)) return;
-        cancel_timer(this->expiration_timer);
-}
-
-void TcpClient::DeleteExpirationTimer() {
-
-    if (!this->expiration_timer) return;
-    delete_timer(this->expiration_timer);
-    this->expiration_timer = NULL;
-}
-
-void TcpClient::ReStartExpirationTimer() {
-    
-    assert(this->expiration_timer);
-    restart_timer(this->expiration_timer);
 }

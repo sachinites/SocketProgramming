@@ -21,7 +21,7 @@ static void
 intitiaze_monitor_fd_set(){
 
     int i = 0;
-    for(; i < MAX_CLIENT_SUPPORTED; i++)
+    for(; i < TCP_SERVER_MAX_CLIENT_SUPPORTED; i++)
         monitored_fd_set[i] = -1;
 }
 
@@ -29,7 +29,7 @@ static void
 add_to_monitored_fd_set(int skt_fd){
 
     int i = 0;
-    for(; i < MAX_CLIENT_SUPPORTED; i++){
+    for(; i < TCP_SERVER_MAX_CLIENT_SUPPORTED; i++){
 
         if(monitored_fd_set[i] != -1)
             continue;   
@@ -42,7 +42,7 @@ static void
 remove_from_monitored_fd_set(int skt_fd){
 
     int i = 0;
-    for(; i < MAX_CLIENT_SUPPORTED; i++){
+    for(; i < TCP_SERVER_MAX_CLIENT_SUPPORTED; i++){
 
         if(monitored_fd_set[i] != skt_fd)
             continue;
@@ -57,7 +57,7 @@ re_init_readfds(fd_set *fd_set_ptr){
 
     FD_ZERO(fd_set_ptr);
     int i = 0;
-    for(; i < MAX_CLIENT_SUPPORTED; i++){
+    for(; i < TCP_SERVER_MAX_CLIENT_SUPPORTED; i++){
         if(monitored_fd_set[i] != -1){
             FD_SET(monitored_fd_set[i], fd_set_ptr);
         }
@@ -70,7 +70,7 @@ get_max_fd(){
     int i = 0;
     int max = -1;
 
-    for(; i < MAX_CLIENT_SUPPORTED; i++){
+    for(; i < TCP_SERVER_MAX_CLIENT_SUPPORTED; i++){
         if(monitored_fd_set[i] > max)
             max = monitored_fd_set[i];
     }

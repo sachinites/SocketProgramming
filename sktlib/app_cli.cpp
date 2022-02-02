@@ -5,7 +5,7 @@
 #include "CommandParser/libcli.h"
 #include "CommandParser/cmdtlv.h"
 #include "tcpcmdcodes.h"
-#include "tcp_mgmt.h"
+#include "tcp_server.h"
 
 extern std::list<TcpServer *> tcp_server_lst;
 
@@ -24,7 +24,7 @@ config_tcp_server_handler (param_t *param,
     TcpServer *tcp_server = NULL;
     const char *ip_addr = "127.0.0.1";
     const char *tcp_server_name = NULL;
-    uint16_t port_no = TCP_DEFAULT_PORT_NO;
+    uint16_t port_no = TCP_SERVER_DEFAULT_PORT_NO;
     
     CMDCODE = EXTRACT_CMD_CODE(tlv_buf);
 
