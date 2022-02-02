@@ -132,7 +132,7 @@ TcpServer::TcpServer() {
 
     this->self_ip_addr = 2130706433; // 127.0.0.1
     this->self_port_no = TCP_DEFAULT_PORT_NO;
-    sem_init(&semaphore_wait_for_server_thread_update, 0 , 0);
+    sem_init(&semaphore_wait_for_thread_start, 0 , 0);
     name = "Default";
     memcpy(this->ka_msg, "Default KA Msg\0", strlen("Default KA Msg\0"));
 }
@@ -149,7 +149,7 @@ TcpServer::TcpServer(const uint32_t& self_ip_addr, const uint16_t& self_port_no,
 
     this->self_ip_addr = self_ip_addr;
     this->self_port_no = self_port_no;
-    sem_init(&semaphore_wait_for_server_thread_update, 0 , 0);
+    sem_init(&semaphore_wait_for_thread_start, 0 , 0);
     this->name = name;
     memcpy(this->ka_msg, "Default KA Msg\0", strlen("Default KA Msg\0"));
 }
@@ -307,6 +307,7 @@ TcpServer::TcpServerThreadFn() {
             TcpClient *tcp_client = new TcpClient();
             tcp_client->tcp_server = tcp_server;
             tcp_client->tcp_conn = tcp_conn;
+            tcp_client->StartExpirationTimer();
             tcp_server->tcp_client_conns.push_back(tcp_client);
             /* Now send Connect notification */
             if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_connected) {
@@ -467,7 +468,6 @@ TcpServer::Stop() {
    close (this->master_skt_fd);
    delete this->tcp_notif;
    sem_destroy(&this->semaphore_wait_for_thread_start);
-   sem_destroy(&this->semaphore_wait_for_server_thread_update);
    assert(!this->pending_tcp_client);
    assert(this->tcp_client_conns.empty());
    if (this->ka_timer) {
@@ -519,7 +519,7 @@ TcpServer::TcpSelfConnect() {
     
     printf ("Waiting for client disconnection\n");
     if (this->server_pending_operation != tcp_server_shut_down) {
-        sem_wait(&semaphore_wait_for_server_thread_update);
+        sem_wait(&semaphore_wait_for_thread_start);
     }
     printf ("Client disconnection successful\n");
 
@@ -637,7 +637,7 @@ TcpServer::TcpServerChangeState(
              RemoveTcpClient(tcp_client);
              tcp_client->TcpClientAbort();
              n_clients_connected--;
-             sem_post(&semaphore_wait_for_server_thread_update);
+             sem_post(&semaphore_wait_for_thread_start);
              rc = true;
         }
         break;
@@ -652,7 +652,7 @@ TcpServer::TcpServerChangeState(
              RemoveTcpClient(tcp_client);
              tcp_client->TcpClientAbort();
              n_clients_connected--;
-             sem_post(&semaphore_wait_for_server_thread_update);
+             sem_post(&semaphore_wait_for_thread_start);
              rc = true;
              break;
         case tcp_server_shut_down:
@@ -805,6 +805,7 @@ TcpServer::TcpServerCreateMultithreadedClient(
     tcp_conn->self_port_no = this->self_port_no;
     tcp_conn->self_addr = this->self_ip_addr;
     tcp_client->tcp_conn = tcp_conn;
+    tcp_client->StartExpirationTimer();
    this->tcp_client_conns.push_back(tcp_client);
    tcp_client->client_thread = (pthread_t *)calloc ( 1, sizeof (pthread_t));
    pthread_create (tcp_client->client_thread, NULL, tcp_client_thread_fn, (void *)tcp_client);
@@ -871,6 +872,10 @@ TcpClient::Display() {
         printf ("listen by server : %s\n", listen_by_server ? "yes" : "no");
     }
     printf ("client thread = %p\n", client_thread);
+    
+    printf ("Expiration Timer Remaining (in msec )= %lu\n", 
+        timer_get_time_remaining_in_mill_sec(this->expiration_timer));
+
     printf ("Tcp Conn = %p\n", tcp_conn);
     if (tcp_conn) {
         printf ("Conn : \n");
@@ -937,18 +942,54 @@ TcpClient::TcpClientAbort() {
     else {
          ref_count--;
     }
+    if (this->expiration_timer) {
+        delete_timer(this->expiration_timer);
+        this->expiration_timer = NULL;
+    }
     if (ref_count == 0) {
         delete this;
     }
 }
 
-void TcpClient::StartExpirationTimer() {
-    
+static void
+tcp_client_expiration_timer_expired(Timer_t *timer, void *arg) {
 
+    TcpClient *tcp_client = (TcpClient *)arg;
+    TcpServer *tcp_server = tcp_client->tcp_server;
+    tcp_server->AbortClient(tcp_client);
 }
+
+void
+TcpClient::StartExpirationTimer() {
+    
+    if (this->expiration_timer) return;
+
+    this->expiration_timer = setup_timer(tcp_client_expiration_timer_expired,
+                                                TCP_HOLD_DOWN_TIMER * 1000,
+                                                TCP_HOLD_DOWN_TIMER * 1000,
+                                                0,
+                                                (void *)this, false);
+
+    assert(this->expiration_timer);
+    start_timer(this->expiration_timer);
+}
+
 void TcpClient::CancelExpirationTimer() {
 
+        if (!this->expiration_timer) return;
+        if (!is_timer_running(this->expiration_timer)) return;
+        cancel_timer(this->expiration_timer);
 }
+
 void TcpClient::DeleteExpirationTimer() {
 
+    if (!this->expiration_timer) return;
+    delete_timer(this->expiration_timer);
+    this->expiration_timer = NULL;
+}
+
+void TcpClient::ReStartExpirationTimer() {
+    
+    assert(this->expiration_timer);
+    restart_timer(this->expiration_timer);
 }

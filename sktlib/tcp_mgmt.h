@@ -32,6 +32,7 @@
 #define MAX_CLIENT_SUPPORTED    100
 #define TCP_CONN_RECV_BUFFER_SIZE    1028
 #define TCP_DEFAULT_PORT_NO 40000
+#define TCP_HOLD_DOWN_TIMER 15
 
 typedef enum {
 
@@ -118,6 +119,7 @@ class TcpClient {
     void StartExpirationTimer();
     void CancelExpirationTimer();
     void DeleteExpirationTimer();
+    void ReStartExpirationTimer();
     
     /* Methods */
     TcpClient();
@@ -158,7 +160,6 @@ class TcpServer {
         pthread_t server_thread;
         TcpServerNotification *tcp_notif;
         sem_t semaphore_wait_for_thread_start;
-        sem_t semaphore_wait_for_server_thread_update;
         uint8_t tcp_server_state_flags;
         fd_set active_client_fds;
         fd_set backup_client_fds;
