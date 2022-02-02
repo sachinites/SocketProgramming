@@ -36,7 +36,7 @@ TcpClient::Display() {
     printf ("client thread = %p\n", client_thread);
     
     printf ("Expiration Timer Remaining (in msec )= %lu\n", 
-        timer_get_time_remaining_in_mill_sec(this->expiration_timer));
+        this->expiration_timer ? timer_get_time_remaining_in_mill_sec(this->expiration_timer) : 0);
 
     printf ("Tcp Conn = %p\n", tcp_conn);
     if (tcp_conn) {

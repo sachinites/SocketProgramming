@@ -207,7 +207,7 @@ TcpServer::TcpServerThreadFn() {
 
     while (true) {
 
-        memcpy(&tcp_server->active_client_fds,
+       memcpy(&tcp_server->active_client_fds,
                       &tcp_server->backup_client_fds, sizeof(fd_set));
 
          printf ("\nServer blocked on select\n");
@@ -259,7 +259,10 @@ TcpServer::TcpServerThreadFn() {
             TcpClient *tcp_client = new TcpClient();
             tcp_client->tcp_server = tcp_server;
             tcp_client->tcp_conn = tcp_conn;
-            tcp_client->StartExpirationTimer();
+            if (tcp_server->TcpServerGetStateFlag() &
+                   TCP_SERVER_STATE_SET_AUTO_CLIENT_DISCONNECTION ) {
+                tcp_client->StartExpirationTimer();
+            }
             tcp_server->tcp_client_conns.push_back(tcp_client);
             /* Now send Connect notification */
             if (tcp_server->tcp_notif && tcp_server->tcp_notif->client_connected) {
@@ -267,7 +270,7 @@ TcpServer::TcpServerThreadFn() {
             }
          }
 
-        else if (FD_ISSET(tcp_server->dummy_master_skt_fd, &tcp_server->active_client_fds)){
+        if (FD_ISSET(tcp_server->dummy_master_skt_fd, &tcp_server->active_client_fds)){
 
             struct sockaddr_in client_addr;
             socklen_t addr_len = sizeof(client_addr);
@@ -310,6 +313,9 @@ TcpServer::TcpServerThreadFn() {
             case tcp_server_force_close_all_client_connections:
                 rc  = TcpServerChangeState(NULL, opn);
                 break;
+            case tcp_server_send_ka_msg_all_clients:
+                rc  = TcpServerChangeState(NULL, opn);
+                break;
             case tcp_server_shut_down:
                 rc = TcpServerChangeState(NULL, opn);
                 assert(!pending_tcp_client);
@@ -321,7 +327,7 @@ TcpServer::TcpServerThreadFn() {
               server_pending_operation = tcp_server_operation_none;
          }
 
-        else {
+         {
             std::list<TcpClient *>::iterator it;
             TcpClient *tcp_client;
             struct sockaddr_in client_addr;
@@ -775,7 +781,10 @@ TcpServer::TcpServerCreateMultithreadedClient(
     tcp_conn->self_port_no = this->self_port_no;
     tcp_conn->self_addr = this->self_ip_addr;
     tcp_client->tcp_conn = tcp_conn;
-    tcp_client->StartExpirationTimer();
+    if (this->TcpServerGetStateFlag() &
+         TCP_SERVER_STATE_SET_AUTO_CLIENT_DISCONNECTION ) {
+        tcp_client->StartExpirationTimer();
+    }
    this->tcp_client_conns.push_back(tcp_client);
    tcp_client->client_thread = (pthread_t *)calloc ( 1, sizeof (pthread_t));
    pthread_create (tcp_client->client_thread, NULL, tcp_client_thread_fn, (void *)tcp_client);

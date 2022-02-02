@@ -64,7 +64,8 @@ typedef enum {
     tcp_server_force_close_all_client_connections,
     /* This actions allows TCP Server to send KA msg for all connected clients */
     tcp_server_send_ka_msg_all_clients,
-    /* This action allows TCP Server to abort all its clients, free up all its resources ( threads,     FDs, Sockets etc) and eventually abort the Server completely */
+    /* This action allows TCP Server to abort all its clients, free up all its resources 
+    ( threads,     FDs, Sockets etc) and eventually abort the Server completely */
     tcp_server_shut_down,
     tcp_server_operations_max
 } tcp_server_operations_t;
@@ -106,6 +107,9 @@ typedef enum {
     /* Setting this state would allow TCP Server to fork new thread for each future
     clients which connects to TCP Server */
     TCP_SERVER_STATE_MULTITHREADED_MODE = 8,
+    /* Not Set by default, if set Connected client are disconnected by TCPServer on 
+    client expiration timer */
+    TCP_SERVER_STATE_SET_AUTO_CLIENT_DISCONNECTION = 16,
     TCP_SERVER_STATE_MAX
 } tsp_server_state_t;
 
