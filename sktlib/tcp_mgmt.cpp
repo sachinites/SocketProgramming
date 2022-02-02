@@ -530,7 +530,6 @@ void
 TcpServer::AbortClient(TcpClient *tcp_client) {
 
     assert (tcp_client->tcp_conn->comm_sock_fd);
-    assert(tcp_client->tcp_conn->conn_state == TCP_ESTABLISHED);
     assert(tcp_client->tcp_conn->conn_origin== tcp_via_accept);
     this->pending_tcp_client = tcp_client;
     tcp_client->ref_count++;
@@ -644,8 +643,10 @@ TcpServer::TcpServerChangeState(
         case tcp_server_force_close_client_connection:
              assert(tcp_client);
              assert(tcp_client->tcp_conn->comm_sock_fd);
-             FD_CLR (tcp_client->tcp_conn->comm_sock_fd, &this->backup_client_fds);
-             remove_from_fd_array(tcp_client->tcp_conn->comm_sock_fd);
+             if (!tcp_client->client_thread) {
+                FD_CLR (tcp_client->tcp_conn->comm_sock_fd, &this->backup_client_fds);
+                remove_from_fd_array(tcp_client->tcp_conn->comm_sock_fd);
+            }
              if (tcp_notif &&  tcp_notif->client_disconnected) {
                 tcp_notif->client_disconnected(tcp_client);
              }
@@ -956,7 +957,23 @@ tcp_client_expiration_timer_expired(Timer_t *timer, void *arg) {
 
     TcpClient *tcp_client = (TcpClient *)arg;
     TcpServer *tcp_server = tcp_client->tcp_server;
-    tcp_server->AbortClient(tcp_client);
+    
+    if (tcp_client->tcp_conn->conn_state == TCP_ESTABLISHED) {
+        tcp_client->tcp_conn->conn_state = TCP_KA_PENDING;
+        tcp_client->CancelExpirationTimer();
+        tcp_client->DeleteExpirationTimer();
+        tcp_client->expiration_timer = setup_timer(tcp_client_expiration_timer_expired,
+                                                                    TCP_CLIENT_HOLD_DOWN_TIMER * 1000,
+                                                                    TCP_CLIENT_HOLD_DOWN_TIMER * 1000,
+                                                                    0, (void *)tcp_client, false);
+        start_timer(tcp_client->expiration_timer);
+    }
+    else if (tcp_client->tcp_conn->conn_state == TCP_KA_PENDING) {
+        tcp_server->AbortClient(tcp_client);
+    }
+    else {
+        assert(0);
+    }
 }
 
 void
@@ -965,8 +982,8 @@ TcpClient::StartExpirationTimer() {
     if (this->expiration_timer) return;
 
     this->expiration_timer = setup_timer(tcp_client_expiration_timer_expired,
-                                                TCP_HOLD_DOWN_TIMER * 1000,
-                                                TCP_HOLD_DOWN_TIMER * 1000,
+                                                TCP_CLIENT_EXPIRATION_TIMER * 1000,
+                                                TCP_CLIENT_EXPIRATION_TIMER * 1000,
                                                 0,
                                                 (void *)this, false);
 
