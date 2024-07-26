@@ -4,12 +4,13 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <memory.h>
+#include <unistd.h>
 #include <errno.h>
 #include "common.h"
 #include <arpa/inet.h>
 
 
-#define MAX_CLIENT_SUPPORTED    32
+#define TCP_SERVER_MAX_CLIENT_SUPPORTED    32
 
 test_struct_t test_struct;
 result_struct_t res_struct;
